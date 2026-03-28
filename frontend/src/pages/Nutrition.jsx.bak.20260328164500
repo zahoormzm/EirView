@@ -7,36 +7,10 @@ import NutritionTargets from '../components/NutritionTargets';
 import NutritionTracker from '../components/NutritionTracker';
 import useStore from '../store';
 
-function formatDateTime(value) {
-  if (!value) return null;
-  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? value.replace(' ', 'T') : value;
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-function formatDayLabel(value) {
-  if (!value) return 'Unknown day';
-  const parsed = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value.replace(' ', 'T'));
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
-}
-
-function groupMealsByDay(meals) {
-  const grouped = new Map();
-  meals.forEach((meal) => {
-    const key = String(meal.timestamp || meal.date || '').slice(0, 10) || 'unknown';
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(meal);
-  });
-  return Array.from(grouped.entries()).map(([day, dayMeals]) => ({ day, dayMeals }));
-}
-
 export default function Nutrition() {
   const { dashboard, selectedUserId, showToast, setDashboard } = useStore();
   const [analysis, setAnalysis] = useState(null);
   const [description, setDescription] = useState('');
-  const groupedMeals = groupMealsByDay(dashboard?.recent_meals || []);
   const latestMealSummary = analysis
     ? {
         items: (analysis.items || []).map((item) => ({
@@ -125,23 +99,12 @@ export default function Nutrition() {
       />
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="font-semibold text-slate-900 mb-4">Recent Meals</div>
-        {groupedMeals.length ? groupedMeals.map(({ day, dayMeals }) => (
-          <div key={day} className="mb-5 last:mb-0">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{formatDayLabel(day)}</div>
-            <div className="space-y-3">
-              {dayMeals.map((meal) => (
-                <div key={meal.id} className="rounded-xl border border-slate-100 bg-slate-50/70 px-4 py-3">
-                  <div className="text-sm font-medium text-slate-700">{meal.description || 'Meal entry'}</div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-                    <span>Logged on {formatDateTime(meal.timestamp || meal.date) || meal.date}</span>
-                    <span>{meal.calories || meal.nutrition?.calories || 0} cal</span>
-                    {meal.photo_path ? <span>Photo analysis</span> : <span>Meal entry</span>}
-                  </div>
-                </div>
-              ))}
-            </div>
+        {(dashboard?.recent_meals || []).map((meal) => (
+          <div key={meal.id} className="py-3 border-b border-slate-100">
+            <div className="text-sm text-slate-700">{meal.description || 'Meal entry'}</div>
+            <div className="text-xs text-slate-500">{meal.timestamp || meal.date} · {meal.calories || meal.nutrition?.calories || 0} cal</div>
           </div>
-        )) : <div className="text-sm text-slate-500">No meals logged yet.</div>}
+        ))}
       </div>
     </div>
   );

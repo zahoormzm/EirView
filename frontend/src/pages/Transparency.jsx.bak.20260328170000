@@ -55,10 +55,6 @@ export default function Transparency() {
     ['Deterministic', statsFor('deterministic'), 'bg-slate-50 border-slate-200']
   ];
   const recentCalls = data?.recent_calls || [];
-  const selectedUserLogs = data?.agent_logs || [];
-  const globalLogs = data?.global_agent_logs || [];
-  const selectedUserHasActivity = !!data?.selected_user_has_activity;
-  const providerStatus = data?.provider_status || {};
 
   return (
     <div className="space-y-6">
@@ -66,21 +62,11 @@ export default function Transparency() {
         <div>
           <div className="font-semibold text-slate-900">Live Transparency Feed</div>
           <div className="text-sm text-slate-600 mt-1">
-            This tab auto-refreshes every 5 seconds. Top cards and recent model calls are global to the running backend. Stored traces below prefer the selected user, then fall back to the latest global trace feed.
+            This tab auto-refreshes every 5 seconds. Stored agent logs appear after agent/tool runs, while recent model calls appear below even before they are summarized elsewhere.
           </div>
         </div>
         <div className="text-sm text-slate-500">
           Last updated: {lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' }) : 'Loading...'}
-        </div>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-          Selected user: <span className="font-medium text-slate-900">{selectedUserId}</span>{' '}
-          {selectedUserHasActivity ? 'has stored transparency traces.' : 'has no stored traces yet, so the latest global backend feed is shown below.'}
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-          Provider status: Claude <span className={providerStatus.claude_configured ? 'text-emerald-700 font-medium' : 'text-red-600 font-medium'}>{providerStatus.claude_configured ? 'configured' : 'not configured'}</span>{' '}
-          · Gemini <span className={providerStatus.gemini_configured ? 'text-emerald-700 font-medium' : 'text-red-600 font-medium'}>{providerStatus.gemini_configured ? 'configured' : 'not configured'}</span>
         </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -93,20 +79,12 @@ export default function Transparency() {
           </div>
         ))}
       </div>
-      <AgentTrace
-        title={selectedUserHasActivity ? 'Selected User Trace Feed' : 'Global Trace Feed'}
-        data={selectedUserHasActivity ? selectedUserLogs : globalLogs}
-        emptyMessage={
-          selectedUserHasActivity
-            ? `No stored agent traces yet for ${selectedUserId}. Use Coach, Mental Health, Future Self, or uploads to create them.`
-            : 'No stored agent traces anywhere yet. Use Coach, Mental Health, Future Self, or uploads that invoke agents to populate this.'
-        }
-      />
+      <AgentTrace data={data?.agent_logs || []} />
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-x-auto">
         <div className="font-semibold text-slate-900">Recent Model Calls</div>
-        <div className="text-sm text-slate-500 mt-1">These are the latest provider calls seen by the current backend process, regardless of selected user.</div>
+        <div className="text-sm text-slate-500 mt-1">These are the latest provider calls seen by the backend process.</div>
         {!recentCalls.length ? (
-          <div className="text-sm text-slate-500 mt-4">No recent model calls are in backend memory yet. This usually means the server was restarted recently or no AI-backed feature has run since startup.</div>
+          <div className="text-sm text-slate-500 mt-4">No recent model calls in memory yet. Trigger Coach, Mental Health, Future Self, blood parsing, or meal/photo analysis to populate this.</div>
         ) : (
           <table className="w-full mt-4">
             <thead>

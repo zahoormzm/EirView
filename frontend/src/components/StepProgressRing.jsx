@@ -1,4 +1,4 @@
-export default function StepProgressRing({ current = 0, goal = 7500, size = 160, compact = false }) {
+export default function StepProgressRing({ current = 0, goal = 7500, size = 160, compact = false, note = null }) {
   const strokeWidth = 8;
   const radius = (size - 16) / 2;
   const center = size / 2;
@@ -15,6 +15,7 @@ export default function StepProgressRing({ current = 0, goal = 7500, size = 160,
         <text x={center} y={center + 18} textAnchor="middle" className="fill-slate-400 text-[12px]">/ {goal.toLocaleString()}</text>
       </svg>
       <div className={`${compact ? 'text-xs mt-2' : 'text-sm mt-3'} text-slate-500 text-center`}>steps today</div>
+      {note ? <div className="mt-2 text-[11px] text-slate-400 text-center">{note}</div> : null}
     </div>
   );
 }

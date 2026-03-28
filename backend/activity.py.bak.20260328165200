@@ -18,7 +18,7 @@ WORKOUT_IMPACT_MAP: dict[str, dict[str, float]] = {
 }
 
 WORKOUT_MATCH_MAP: dict[str, set[str]] = {
-    "walking": {"walking", "running"},
+    "walking": {"walking"},
     "running": {"running"},
     "cycling": {"cycling"},
     "swimming": {"swimming"},
@@ -26,11 +26,6 @@ WORKOUT_MATCH_MAP: dict[str, set[str]] = {
     "strength": {"strength", "weight_training"},
     "weight_training": {"strength", "weight_training"},
     "hiit": {"hiit"},
-}
-
-STEP_EQUIVALENT_PER_MIN: dict[str, int] = {
-    "walking": 100,
-    "running": 165,
 }
 
 
@@ -53,15 +48,6 @@ def _matching_workout_types(target_type: str) -> set[str]:
 
     normalized = str(target_type or "").strip().lower().replace(" ", "_")
     return WORKOUT_MATCH_MAP.get(normalized, {normalized})
-
-
-def _step_equivalent_for_workout(workout: dict[str, Any]) -> int:
-    """Return estimated steps contributed by one workout when step data is manual only."""
-
-    workout_type = str(workout.get("type") or "").strip().lower().replace(" ", "_")
-    duration = int(workout.get("duration_min") or 0)
-    per_minute = STEP_EQUIVALENT_PER_MIN.get(workout_type, 0)
-    return max(duration, 0) * per_minute
 
 
 async def log_workout(user_id: str, workout_data: dict[str, Any], db: aiosqlite.Connection) -> dict[str, Any]:
@@ -140,26 +126,6 @@ async def get_workout_summary(user_id: str, db: aiosqlite.Connection, days: int 
         "impact_totals": {key: round(value, 2) for key, value in impact_totals.items()},
         "avg_sessions_per_week": round(len(rows) * 7 / max(days, 1), 1),
         "chart": chart_days,
-    }
-
-
-async def get_today_activity_overlay(user_id: str, db: aiosqlite.Connection) -> dict[str, Any]:
-    """Return today's logged-activity overlay for dashboards and activity UI."""
-
-    today = str(date.today())
-    rows = await (
-        await db.execute("SELECT * FROM workouts WHERE user_id=? AND date=? ORDER BY timestamp DESC", (user_id, today))
-    ).fetchall()
-    workouts = [dict(row) for row in rows]
-    manual_rows = [item for item in workouts if str(item.get("source") or "manual").lower() != "healthkit_mobile"]
-    estimated_steps = sum(_step_equivalent_for_workout(item) for item in manual_rows)
-    total_minutes = sum(int(item.get("duration_min") or 0) for item in workouts)
-    total_calories = round(sum(float(item.get("calories") or 0) for item in workouts), 1)
-    return {
-        "estimated_steps_from_logged_activity": estimated_steps,
-        "logged_workout_minutes_today": total_minutes,
-        "logged_workout_calories_today": total_calories,
-        "logged_cardio_sessions_today": sum(1 for item in workouts if str(item.get("type") or "").lower() in {"walking", "running"}),
     }
 
 

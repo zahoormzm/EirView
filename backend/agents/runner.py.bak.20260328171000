@@ -35,30 +35,12 @@ async def run_agent(agent_module: Any, user_id: str, input_data: dict[str, Any],
     total_tokens_out = 0
     for _ in range(MAX_AGENT_ITERATIONS):
         start = time.time()
-        try:
-            response = ai_router._call_claude(
-                system=agent_module.SYSTEM_PROMPT,
-                messages=messages,
-                tools=getattr(agent_module, "TOOLS", None),
-                max_tokens=ai_router.default_max_tokens,
-            )
-        except Exception as exc:
-            latency = int((time.time() - start) * 1000)
-            fallback_text = ai_router._deterministic_text(agent_module.SYSTEM_PROMPT, messages)
-            ai_router._log(agent_module.NAME, ai_router.claude_model, latency / 1000, False, str(exc))
-            await db.execute(
-                "INSERT INTO agent_logs (user_id, agent_name, action, latency_ms, model, response) VALUES (?,?,?,?,?,?)",
-                (user_id, agent_module.NAME, "error_fallback", latency, ai_router.claude_model, str(exc)[:4000]),
-            )
-            await db.commit()
-            return {
-                "result": fallback_text,
-                "traces": all_traces,
-                "tokens_in": total_tokens_in,
-                "tokens_out": total_tokens_out,
-                "fallback": True,
-                "error": str(exc),
-            }
+        response = ai_router._call_claude(
+            system=agent_module.SYSTEM_PROMPT,
+            messages=messages,
+            tools=getattr(agent_module, "TOOLS", None),
+            max_tokens=ai_router.default_max_tokens,
+        )
         latency = int((time.time() - start) * 1000)
         usage = getattr(response, "usage", None)
         total_tokens_in += int(getattr(usage, "input_tokens", 0))

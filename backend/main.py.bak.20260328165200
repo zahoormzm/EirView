@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.activity import check_inactivity, get_today_activity_overlay, get_workout_summary, get_workouts, get_workout_targets, log_workout
+from backend.activity import check_inactivity, get_workout_summary, get_workouts, get_workout_targets, log_workout
 from backend.agents import coach, collector, mental_health, mirror, runner, time_machine
 from backend.ai_router import ai_router
 from backend.alerts import check_alerts, notify_doctor, process_alerts
@@ -36,7 +36,7 @@ from backend.database import (
     update_profile_fields,
 )
 from backend.family import create_family, get_family_dashboard, join_family
-from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, project_risk, simulate_habit_change
+from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, simulate_habit_change
 from backend.gamification import get_gamification_summary, get_leaderboard, process_action
 from backend.parsers import analyze_meal_photo, parse_apple_health_file, parse_apple_health_xml
 from backend.reports import build_doctor_report, render_doctor_report_text
@@ -965,7 +965,6 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
         nutrition = nutrition_targets(profile)
         workout_summary = await get_workout_summary(user_id, db)
         workout_target_data = await get_workout_targets(user_id, db)
-        activity_overlay = await get_today_activity_overlay(user_id, db)
         meals = await get_meals(user_id)
         nutrition.update(_today_nutrition_progress(meals))
         water_today_ml = await get_water_today(user_id)
@@ -976,20 +975,15 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
 
             risk_rows = project_risk(profile)
             await save_risk_projections(user_id, risk_rows)
-        base_steps = int(profile.get("steps_today") or 0)
-        estimated_steps = int(activity_overlay.get("estimated_steps_from_logged_activity") or 0)
         metrics = {
             "resting_hr": profile.get("resting_hr"),
             "hrv": profile.get("hrv_ms"),
-            "steps": base_steps + estimated_steps,
-            "steps_base": base_steps,
-            "steps_from_logged_activity": estimated_steps,
+            "steps": profile.get("steps_today"),
             "sleep": profile.get("sleep_hours"),
             "vo2max": profile.get("vo2max"),
             "spo2": profile.get("blood_oxygen_pct"),
-            "exercise_min": max(int(profile.get("exercise_min") or 0), int(activity_overlay.get("logged_workout_minutes_today") or 0)),
+            "exercise_min": profile.get("exercise_min"),
             "flights": profile.get("flights_climbed"),
-            "logged_workout_calories": activity_overlay.get("logged_workout_calories_today"),
         }
         nudge = check_inactivity(profile, datetime.now().hour)
         cross_domain = _build_cross_domain_insight(profile, bio_age)
@@ -1305,9 +1299,6 @@ async def get_transparency(user_id: str) -> dict[str, Any]:
         cursor = await db.execute("SELECT * FROM agent_logs WHERE user_id=? ORDER BY timestamp DESC LIMIT 100", (user_id,))
         rows = await cursor.fetchall()
         logs = [dict(row) for row in rows]
-        global_cursor = await db.execute("SELECT * FROM agent_logs ORDER BY timestamp DESC LIMIT 100")
-        global_rows = await global_cursor.fetchall()
-        global_logs = [dict(row) for row in global_rows]
         model_stats: dict[str, Any] = {
             "claude": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
             "gemini": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
@@ -1336,15 +1327,9 @@ async def get_transparency(user_id: str) -> dict[str, Any]:
             stats["success_rate"] = round(stats["success"] / max(stats["calls"], 1) * 100, 1)
         return {
             "agent_logs": logs,
-            "global_agent_logs": global_logs,
-            "selected_user_has_activity": bool(logs),
             "model_stats": model_stats,
             "exact_model_stats": exact_model_stats,
             "recent_calls": ai_router.call_log[-50:],
-            "provider_status": {
-                "claude_configured": bool(getattr(ai_router, "anthropic", None)),
-                "gemini_configured": bool(getattr(ai_router, "gemini", None)),
-            },
         }
     finally:
         await db.close()

@@ -1,13 +1,12 @@
 import { Fragment, useState } from 'react';
 
-export default function AgentTrace({ data = [], emptyMessage = null, title = null }) {
+export default function AgentTrace({ data = [] }) {
   const [open, setOpen] = useState(null);
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-x-auto">
-      {title ? <div className="font-semibold text-slate-900 mb-4">{title}</div> : null}
       {!data.length && (
         <div className="text-sm text-slate-500 mb-4">
-          {emptyMessage || 'No stored agent traces yet. Use Coach, Mental Health, Future Self, uploads that invoke agents, or wait for live model calls below.'}
+          No stored agent traces yet. Use Coach, Mental Health, Future Self, uploads that invoke agents, or wait for live model calls below.
         </div>
       )}
       <table className="w-full">

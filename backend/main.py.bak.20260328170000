@@ -36,7 +36,7 @@ from backend.database import (
     update_profile_fields,
 )
 from backend.family import create_family, get_family_dashboard, join_family
-from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, project_risk, simulate_habit_change
+from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, simulate_habit_change
 from backend.gamification import get_gamification_summary, get_leaderboard, process_action
 from backend.parsers import analyze_meal_photo, parse_apple_health_file, parse_apple_health_xml
 from backend.reports import build_doctor_report, render_doctor_report_text
@@ -1305,9 +1305,6 @@ async def get_transparency(user_id: str) -> dict[str, Any]:
         cursor = await db.execute("SELECT * FROM agent_logs WHERE user_id=? ORDER BY timestamp DESC LIMIT 100", (user_id,))
         rows = await cursor.fetchall()
         logs = [dict(row) for row in rows]
-        global_cursor = await db.execute("SELECT * FROM agent_logs ORDER BY timestamp DESC LIMIT 100")
-        global_rows = await global_cursor.fetchall()
-        global_logs = [dict(row) for row in global_rows]
         model_stats: dict[str, Any] = {
             "claude": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
             "gemini": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
@@ -1336,15 +1333,9 @@ async def get_transparency(user_id: str) -> dict[str, Any]:
             stats["success_rate"] = round(stats["success"] / max(stats["calls"], 1) * 100, 1)
         return {
             "agent_logs": logs,
-            "global_agent_logs": global_logs,
-            "selected_user_has_activity": bool(logs),
             "model_stats": model_stats,
             "exact_model_stats": exact_model_stats,
             "recent_calls": ai_router.call_log[-50:],
-            "provider_status": {
-                "claude_configured": bool(getattr(ai_router, "anthropic", None)),
-                "gemini_configured": bool(getattr(ai_router, "gemini", None)),
-            },
         }
     finally:
         await db.close()

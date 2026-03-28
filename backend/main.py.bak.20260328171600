@@ -36,7 +36,7 @@ from backend.database import (
     update_profile_fields,
 )
 from backend.family import create_family, get_family_dashboard, join_family
-from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, project_risk, simulate_habit_change
+from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, simulate_habit_change
 from backend.gamification import get_gamification_summary, get_leaderboard, process_action
 from backend.parsers import analyze_meal_photo, parse_apple_health_file, parse_apple_health_xml
 from backend.reports import build_doctor_report, render_doctor_report_text

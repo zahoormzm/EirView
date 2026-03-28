@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getDashboard, getWorkouts, getWorkoutSummary, getWorkoutTargets, logWorkout } from '../api';
+import { getWorkouts, getWorkoutSummary, getWorkoutTargets, logWorkout } from '../api';
 import ActivityNudge from '../components/ActivityNudge';
 import ChatInterface from '../components/ChatInterface';
 import StepProgressRing from '../components/StepProgressRing';
@@ -9,7 +9,7 @@ import WorkoutTargets from '../components/WorkoutTargets';
 import useStore from '../store';
 
 export default function ActivityPage() {
-  const { selectedUserId, dashboard, showToast, setDashboard } = useStore();
+  const { selectedUserId, dashboard, showToast } = useStore();
   const [workouts, setWorkouts] = useState([]);
   const [summary, setSummary] = useState(dashboard?.workout_summary);
   const [targets, setTargets] = useState(dashboard?.workout_targets);
@@ -55,11 +55,7 @@ export default function ActivityPage() {
   const submit = async () => {
     try {
       await logWorkout(selectedUserId, { ...form, type: form.type });
-      const [dashboardResponse] = await Promise.all([
-        getDashboard(selectedUserId),
-        load()
-      ]);
-      setDashboard(dashboardResponse.data);
+      await load();
       showToast('Workout logged');
     } catch (error) {
       showToast(error.message, 'error');
