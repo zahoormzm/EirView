@@ -5,6 +5,8 @@ from typing import Any
 
 import aiosqlite
 
+from backend.database import get_profile_dict
+
 XP_AWARDS: dict[str, int] = {
     "meal_log": 10,
     "step_goal": 15,
@@ -77,18 +79,13 @@ async def log_action(user_id: str, action: str, db: aiosqlite.Connection) -> dic
     total_xp = int(streak_row["total_xp"]) if streak_row else 0
     last_streak_date = streak_row["last_streak_date"] if streak_row else None
     total_xp += xp
-    actions_today_row = await (
-        await db.execute("SELECT COUNT(DISTINCT action) AS count FROM daily_actions WHERE user_id=? AND date=?", (user_id, today_str))
-    ).fetchone()
-    actions_today = int(actions_today_row["count"]) if actions_today_row else 0
-    if actions_today >= 3:
-        yesterday = str(today - timedelta(days=1))
-        if last_streak_date == yesterday:
-            current_streak += 1
-        elif last_streak_date != today_str:
-            current_streak = 1
-        longest_streak = max(longest_streak, current_streak)
-        last_streak_date = today_str
+    yesterday = str(today - timedelta(days=1))
+    if last_streak_date == yesterday:
+        current_streak += 1
+    elif last_streak_date != today_str:
+        current_streak = 1
+    longest_streak = max(longest_streak, current_streak)
+    last_streak_date = today_str
     level, _ = get_level(total_xp)
     await db.execute(
         "INSERT OR REPLACE INTO streaks (user_id, current_streak, longest_streak, last_streak_date, total_xp, level) VALUES (?,?,?,?,?,?)",
@@ -184,9 +181,7 @@ async def get_leaderboard(db: aiosqlite.Connection) -> list[dict[str, Any]]:
 async def check_achievements(user_id: str, db: aiosqlite.Connection) -> list[str]:
     """Check all achievement conditions for the user and award new ones."""
 
-    profile = await (
-        await db.execute("SELECT * FROM profiles WHERE user_id=?", (user_id,))
-    ).fetchone()
+    profile = await get_profile_dict(user_id, db)
     streak = await (await db.execute("SELECT * FROM streaks WHERE user_id=?", (user_id,))).fetchone()
     earned_rows = await (await db.execute("SELECT badge_id FROM achievements WHERE user_id=?", (user_id,))).fetchall()
     earned = {row["badge_id"] for row in earned_rows}
@@ -197,15 +192,23 @@ async def check_achievements(user_id: str, db: aiosqlite.Connection) -> list[str
             newly_earned.append(badge_id)
 
     blood_fields = ["ldl", "hdl", "triglycerides", "total_cholesterol", "vitamin_d", "b12", "tsh", "ferritin"]
-    award("first_blood", bool(profile and any(profile[field] is not None for field in blood_fields)))
-    award("face_future", bool(profile and profile["face_age"] is not None))
-    award("stand_tall", bool(profile and (profile["posture_score_pct"] or 0) > 80))
+    award("first_blood", bool(profile and any(profile.get(field) is not None for field in blood_fields)))
+    award("face_future", bool(profile and profile.get("face_age") is not None))
+    award("stand_tall", bool(profile and (profile.get("posture_score_pct") or 0) > 80))
     future_log = await (
         await db.execute("SELECT 1 FROM agent_logs WHERE user_id=? AND action LIKE '%future_self%' LIMIT 1", (user_id,))
     ).fetchone()
     award("time_traveler", future_log is not None)
-    award("know_thyself", bool(profile and profile["phq9_score"] is not None))
-    award("age_bender", bool(profile and profile["bio_age_overall"] is not None and profile["age"] is not None and float(profile["bio_age_overall"]) <= float(profile["age"]) - 1))
+    award("know_thyself", bool(profile and profile.get("phq9_score") is not None))
+    award(
+        "age_bender",
+        bool(
+            profile
+            and profile.get("bio_age_overall") is not None
+            and profile.get("age") is not None
+            and float(profile["bio_age_overall"]) <= float(profile["age"]) - 1
+        ),
+    )
     if profile:
         filled = sum(1 for key in profile.keys() if key != "user_id" and profile[key] is not None)
         award("data_complete", filled / max(len(profile.keys()) - 1, 1) > 0.9)

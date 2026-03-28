@@ -16,6 +16,8 @@ def _get_session() -> Any:
 
     global _session
     if _session is None:
+        if not os.path.exists(ONNX_MODEL):
+            raise FileNotFoundError(f"FaceAge ONNX model not found at {ONNX_MODEL}")
         import onnxruntime as ort  # type: ignore
 
         _session = ort.InferenceSession(ONNX_MODEL)
@@ -25,7 +27,10 @@ def _get_session() -> Any:
 def detect_and_crop_face(img: np.ndarray) -> np.ndarray | None:
     """Detect a face using MediaPipe and return a cropped region."""
 
-    import mediapipe as mp  # type: ignore
+    try:
+        import mediapipe as mp  # type: ignore
+    except Exception as exc:  # pragma: no cover - native dependency import
+        raise RuntimeError("MediaPipe face detection is unavailable in this environment") from exc
 
     with mp.solutions.face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as detector:
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)

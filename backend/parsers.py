@@ -330,6 +330,20 @@ def parse_apple_health_xml(file_path: str) -> dict:
 
     import xml.etree.ElementTree as et
 
+    result: dict[str, Any] = {
+        "resting_hr": None,
+        "hrv_ms": None,
+        "steps_avg_7d": None,
+        "active_energy_kcal_avg_7d": None,
+        "exercise_min_avg_7d": None,
+        "vo2max": None,
+        "respiratory_rate": None,
+        "walking_asymmetry_pct": None,
+        "flights_climbed_avg_7d": None,
+        "blood_oxygen_pct": None,
+        "sleep_hours": None,
+        "workouts_7d": [],
+    }
     now = datetime.now()
     week_ago = now - timedelta(days=7)
     metrics: dict[str, list[float]] = defaultdict(list)
@@ -347,34 +361,40 @@ def parse_apple_health_xml(file_path: str) -> dict:
         "HKQuantityTypeIdentifierFlightsClimbed": "flights_climbed",
         "HKQuantityTypeIdentifierOxygenSaturation": "blood_oxygen_pct",
     }
-    for _, elem in et.iterparse(file_path, events=("end",)):
-        if elem.tag == "Record":
-            try:
-                start_dt = datetime.strptime((elem.get("startDate", "") or "")[:19], "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                elem.clear()
-                continue
-            if start_dt < week_ago:
-                elem.clear()
-                continue
-            record_type = elem.get("type", "")
-            if record_type in type_map:
+    try:
+        iterator = et.iterparse(file_path, events=("end",))
+    except (FileNotFoundError, et.ParseError, OSError):
+        return result
+    try:
+        for _, elem in iterator:
+            if elem.tag == "Record":
                 try:
-                    metrics[type_map[record_type]].append(float(elem.get("value", 0)))
+                    start_dt = datetime.strptime((elem.get("startDate", "") or "")[:19], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    elem.clear()
+                    continue
+                if start_dt < week_ago:
+                    elem.clear()
+                    continue
+                record_type = elem.get("type", "")
+                if record_type in type_map:
+                    try:
+                        metrics[type_map[record_type]].append(float(elem.get("value", 0)))
+                    except ValueError:
+                        pass
+                if record_type == "HKCategoryTypeIdentifierSleepAnalysis":
+                    sleep_samples.append({"startDate": elem.get("startDate", ""), "endDate": elem.get("endDate", ""), "value": elem.get("value", "")})
+                elem.clear()
+            elif elem.tag == "Workout":
+                try:
+                    start_dt = datetime.strptime((elem.get("startDate", "") or "")[:19], "%Y-%m-%d %H:%M:%S")
+                    if start_dt >= week_ago:
+                        workouts.append({"type": (elem.get("workoutActivityType", "") or "").replace("HKWorkoutActivityType", ""), "duration_min": round(float(elem.get("duration", 0))), "calories": round(float(elem.get("totalEnergyBurned", 0))), "date": start_dt.strftime("%Y-%m-%d")})
                 except ValueError:
                     pass
-            if record_type == "HKCategoryTypeIdentifierSleepAnalysis":
-                sleep_samples.append({"startDate": elem.get("startDate", ""), "endDate": elem.get("endDate", ""), "value": elem.get("value", "")})
-            elem.clear()
-        elif elem.tag == "Workout":
-            try:
-                start_dt = datetime.strptime((elem.get("startDate", "") or "")[:19], "%Y-%m-%d %H:%M:%S")
-                if start_dt >= week_ago:
-                    workouts.append({"type": (elem.get("workoutActivityType", "") or "").replace("HKWorkoutActivityType", ""), "duration_min": round(float(elem.get("duration", 0))), "calories": round(float(elem.get("totalEnergyBurned", 0))), "date": start_dt.strftime("%Y-%m-%d")})
-            except ValueError:
-                pass
-            elem.clear()
-    result: dict[str, Any] = {}
+                elem.clear()
+    except et.ParseError:
+        return result
     for key, values in metrics.items():
         if key in {"steps", "active_energy_kcal", "exercise_min", "flights_climbed"}:
             result[f"{key if key != 'steps' else 'steps'}_avg_7d"] = round(sum(values) / 7) if values else None

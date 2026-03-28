@@ -14,6 +14,7 @@ import Gamification from './pages/Gamification';
 import Transparency from './pages/Transparency';
 import Family from './pages/Family';
 import Settings from './pages/Settings';
+import SpotifyCallback from './pages/SpotifyCallback';
 import useStore from './store';
 import { getAlerts, getDashboard, getGamification, getProfile, getUsers } from './api';
 
@@ -80,6 +81,8 @@ export default function App() {
               <Route path="/transparency" element={<Transparency />} />
               <Route path="/family" element={<Family />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/callback" element={<SpotifyCallback />} />
+              <Route path="*" element={<Dashboard />} />
             </Routes>
           </main>
         </div>

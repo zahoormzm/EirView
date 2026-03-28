@@ -70,9 +70,10 @@ export default function ChatInterface({ chatType, userId, title, placeholder, ta
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={(event) => event.key === 'Enter' && send()}
           placeholder={placeholder}
+          aria-label={placeholder}
           className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
         />
-        <button onClick={send} disabled={streaming} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition disabled:opacity-60">
+        <button onClick={send} disabled={streaming} aria-label={`Send ${title} message`} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition disabled:opacity-60">
           <Send size={16} />
         </button>
       </div>

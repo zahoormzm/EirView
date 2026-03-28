@@ -4,7 +4,7 @@ import FamilyDashboard from '../components/FamilyDashboard';
 import useStore from '../store';
 
 export default function Family() {
-  const { profile, selectedUserId, showToast } = useStore();
+  const { profile, selectedUserId, setProfile, showToast } = useStore();
   const [family, setFamily] = useState(null);
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
@@ -33,7 +33,7 @@ export default function Family() {
         <div>
           <div className="font-semibold text-slate-900 mb-4">Create a Family</div>
           <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Family name" className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full" />
-          <button onClick={async () => { try { const response = await createFamily(name, selectedUserId); setFamily({ family: response.data, members: [], health_flags: [] }); showToast('Family created'); } catch (error) { showToast(error.message, 'error'); } }} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition mt-3">Create</button>
+          <button onClick={async () => { try { const response = await createFamily(name, selectedUserId); setFamily({ family: response.data, members: [], health_flags: [] }); setProfile({ ...(profile || {}), family_id: response.data.id }); showToast('Family created'); } catch (error) { showToast(error.message, 'error'); } }} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition mt-3">Create</button>
         </div>
         <div>
           <div className="font-semibold text-slate-900 mb-4">Join a Family</div>
@@ -46,7 +46,7 @@ export default function Family() {
             <option value="summary">Summary</option>
             <option value="minimal">Minimal</option>
           </select>
-          <button onClick={async () => { try { const response = await joinFamily(code, selectedUserId, relationship, privacy); setFamily({ family: response.data, members: [], health_flags: [] }); showToast('Joined family'); } catch (error) { showToast(error.message, 'error'); } }} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition">Join</button>
+          <button onClick={async () => { try { const response = await joinFamily(code, selectedUserId, relationship, privacy); setFamily({ family: response.data, members: [], health_flags: [] }); setProfile({ ...(profile || {}), family_id: response.data.id }); showToast('Joined family'); } catch (error) { showToast(error.message, 'error'); } }} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition">Join</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,16 @@
 import axios from 'axios';
 
-const API = axios.create({ baseURL: 'http://localhost:8000' });
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+const apiUrl = (path) => `${API_BASE}${path}`;
+const API = axios.create({ baseURL: API_BASE || undefined });
+
+API.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    error.message = error?.response?.data?.detail || error?.response?.data?.message || error.message || 'Request failed';
+    return Promise.reject(error);
+  }
+);
 
 export const getUsers = () => API.get('/api/users');
 export const createUser = (data) => API.post('/api/users', data);
@@ -33,21 +43,37 @@ export const logWorkout = (userId, data) => API.post(`/api/workouts/${userId}`, 
 export const getWorkoutSummary = (userId) => API.get(`/api/workouts/${userId}/summary`);
 export const getWorkoutTargets = (userId) => API.get(`/api/workouts/${userId}/targets`);
 export const getTransparency = (userId) => API.get(`/api/transparency/${userId}`);
+export const getSpotifySync = (userId) => API.get(`/api/spotify/sync/${userId}`);
 
 export const streamChat = async (endpoint, userId, message, history, onText, onTool, onDone) => {
-  const response = await fetch(`http://localhost:8000/api/chat/${endpoint}`, {
+  const response = await fetch(apiUrl(`/api/chat/${endpoint}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user_id: userId, message, history })
   });
+  if (!response.ok) {
+    let detail = 'Streaming request failed';
+    try {
+      const payload = await response.json();
+      detail = payload?.detail || payload?.message || detail;
+    } catch {
+      // ignore non-JSON error bodies
+    }
+    throw new Error(detail);
+  }
+  if (!response.body) {
+    throw new Error('Streaming response body is unavailable');
+  }
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  let buffer = '';
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
-    const lines = decoder.decode(value).split('\n');
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
     for (const line of lines) {
       if (!line.startsWith('data: ')) continue;
       try {
@@ -58,6 +84,15 @@ export const streamChat = async (endpoint, userId, message, history, onText, onT
       } catch {
         // ignore malformed chunks
       }
+    }
+    if (done) break;
+  }
+  if (buffer.startsWith('data: ')) {
+    try {
+      const data = JSON.parse(buffer.slice(6));
+      if (data.type === 'done') onDone();
+    } catch {
+      // ignore trailing malformed chunk
     }
   }
 };

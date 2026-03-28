@@ -12,7 +12,17 @@ export default function ActivityPage() {
   const [workouts, setWorkouts] = useState([]);
   const [summary, setSummary] = useState(dashboard?.workout_summary);
   const [targets, setTargets] = useState(dashboard?.workout_targets);
-  const [form, setForm] = useState({ type: 'Running', duration_min: 30, calories: '' });
+  const workoutOptions = [
+    { label: 'Running', value: 'running' },
+    { label: 'Walking', value: 'walking' },
+    { label: 'Cycling', value: 'cycling' },
+    { label: 'Swimming', value: 'swimming' },
+    { label: 'Yoga', value: 'yoga' },
+    { label: 'Strength Training', value: 'weight_training' },
+    { label: 'HIIT', value: 'hiit' },
+    { label: 'Other', value: 'other' }
+  ];
+  const [form, setForm] = useState({ type: 'running', duration_min: 30, calories: '' });
 
   const load = async () => {
     try {
@@ -29,11 +39,11 @@ export default function ActivityPage() {
     }
   };
 
-  useEffect(() => { load(); }, [selectedUserId]);
+  useEffect(() => { load(); }, [selectedUserId, showToast]);
 
   const submit = async () => {
     try {
-      await logWorkout(selectedUserId, { ...form, type: form.type.toLowerCase().replace(' ', '_') });
+      await logWorkout(selectedUserId, { ...form, type: form.type });
       await load();
       showToast('Workout logged');
     } catch (error) {
@@ -51,10 +61,10 @@ export default function ActivityPage() {
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
-            {['Running', 'Walking', 'Cycling', 'Swimming', 'Yoga', 'Strength Training', 'HIIT', 'Other'].map((option) => <option key={option}>{option}</option>)}
+            {workoutOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
-          <input type="number" value={form.duration_min} onChange={(event) => setForm({ ...form, duration_min: Number(event.target.value) })} placeholder="Duration" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-          <input type="number" value={form.calories} onChange={(event) => setForm({ ...form, calories: Number(event.target.value) })} placeholder="Calories" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input type="number" value={form.duration_min} onChange={(event) => setForm({ ...form, duration_min: Number(event.target.value) })} placeholder="Duration (min)" aria-label="Workout duration in minutes" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input type="number" value={form.calories} onChange={(event) => setForm({ ...form, calories: Number(event.target.value) })} placeholder="Calories burned" aria-label="Workout calories burned" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
           <button onClick={submit} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition">Log Workout</button>
         </div>
       </div>

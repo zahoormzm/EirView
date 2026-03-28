@@ -17,6 +17,8 @@ DATA_REFRESH_INTERVALS: dict[str, int] = {
     "spotify": 3,
 }
 
+URGENCY_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
+
 
 def _parse_dt(value: str | None) -> datetime | None:
     """Parse a stored datetime/date string into a datetime."""
@@ -90,7 +92,7 @@ async def get_reminders(user_id: str, db: aiosqlite.Connection) -> list[dict[str
         blood_interval = 90 if (profile["ldl"] or 0) > 130 else 180
         if blood_test and (date.today() - blood_test.date()).days > blood_interval:
             medical("blood_panel", "Blood lipid panel follow-up is due.", (date.today() - blood_test.date()).days - blood_interval)
-    return sorted(reminders, key=lambda item: (item["urgency"], item["days_overdue"]), reverse=True)
+    return sorted(reminders, key=lambda item: (URGENCY_RANK.get(item["urgency"], 0), item["days_overdue"]), reverse=True)
 
 
 async def check_reminders(user_id: str, db: aiosqlite.Connection) -> list[dict[str, Any]]:

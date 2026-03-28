@@ -43,6 +43,21 @@ def _build_spotify_oauth() -> Any:
 sp_oauth: Any = _build_spotify_oauth()
 
 
+def exchange_spotify_code(code: str) -> str:
+    """Exchange an OAuth authorization code for an access token."""
+
+    if spotipy is None or not hasattr(sp_oauth, "get_access_token"):
+        raise RuntimeError("Spotify OAuth is unavailable")
+    token_info = sp_oauth.get_access_token(code, check_cache=False)
+    if isinstance(token_info, dict):
+        access_token = token_info.get("access_token")
+    else:
+        access_token = token_info
+    if not access_token:
+        raise RuntimeError("Spotify token exchange failed")
+    return str(access_token)
+
+
 async def sync_spotify(user_id: str, token: str, db: Any) -> dict:
     """Fetch recent tracks, compute features, and detect mood patterns."""
 

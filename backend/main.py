@@ -40,6 +40,12 @@ from backend.specialists import check_specialists
 
 load_dotenv()
 
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("EIRVIEW_CORS_ORIGINS", "http://127.0.0.1:5173,http://localhost:5173").split(",")
+    if origin.strip()
+]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> Any:
@@ -50,7 +56,7 @@ async def lifespan(app: FastAPI) -> Any:
 
 
 app = FastAPI(title="EirView API", version="1.0.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 def _serialize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -66,6 +72,33 @@ def _trim_chat_history(history: list[dict[str, Any]], limit: int = 6) -> list[di
     for item in history[-limit:]:
         trimmed.append({"role": item.get("role", "user"), "content": str(item.get("content", ""))[-1200:]})
     return trimmed
+
+
+COACH_ALLOWED_KEYWORDS = {
+    "health", "bio age", "biological age", "wellness", "habit", "habits", "nutrition", "food", "meal", "eat", "diet",
+    "calories", "protein", "carbs", "fat", "fiber", "water", "hydration", "exercise", "workout", "training", "walk",
+    "walking", "run", "running", "steps", "sleep", "stress", "recovery", "remainder", "reminder", "doctor", "specialist",
+    "bp", "blood pressure", "hrv", "resting hr", "heart rate", "spo2", "oxygen", "vo2", "cholesterol", "ldl", "hdl",
+    "glucose", "hba1c", "vitamin", "b12", "vitamin d", "tsh", "ferritin", "creatinine", "posture", "weight", "bmi",
+    "mood", "mental", "burnout", "routine", "focus on", "what should i do", "what next", "plan", "goal", "goals",
+    "improve", "reduce", "increase", "lower", "raise"
+}
+
+
+def _is_coach_question_in_scope(message: str) -> bool:
+    """Return True when the coach message is clearly about health coaching."""
+
+    normalized = " ".join(str(message or "").lower().split())
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in COACH_ALLOWED_KEYWORDS)
+
+
+async def _stream_static_sse(message: str) -> Any:
+    """Yield a short static SSE response."""
+
+    yield f"data: {json.dumps({'type': 'text', 'content': message})}\n\n"
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
 
 def _enrich_specialist_recommendations(profile: dict[str, Any], specialists: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -384,19 +417,21 @@ async def chat_future(request: Request) -> StreamingResponse:
     db = await get_db()
 
     async def stream_future_self() -> Any:
-        profile = await get_profile_dict(user_id, db)
-        bio_age = calculate_bio_age(profile or {})
-        age = (profile or {}).get("age", 19)
-        name = (profile or {}).get("name", "you")
-        prompt = f"You are {name} at age {age + 15}, speaking to your younger self. Their bio age is {bio_age['overall']}."
-        messages = history
-        messages.append({"role": "user", "content": message})
-        with ai_router.stream_claude(system=prompt, messages=messages, max_tokens=ai_router.chat_max_tokens) as stream:
-            for event in stream:
-                if getattr(event, "type", "") == "content_block_delta" and hasattr(event.delta, "text"):
-                    yield f"data: {json.dumps({'type': 'text', 'content': event.delta.text})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        await db.close()
+        try:
+            profile = await get_profile_dict(user_id, db)
+            bio_age = calculate_bio_age(profile or {})
+            age = (profile or {}).get("age", 19)
+            name = (profile or {}).get("name", "you")
+            prompt = f"You are {name} at age {age + 15}, speaking to your younger self. Their bio age is {bio_age['overall']}."
+            messages = history
+            messages.append({"role": "user", "content": message})
+            with ai_router.stream_claude(system=prompt, messages=messages, max_tokens=ai_router.chat_max_tokens) as stream:
+                for event in stream:
+                    if getattr(event, "type", "") == "content_block_delta" and hasattr(event.delta, "text"):
+                        yield f"data: {json.dumps({'type': 'text', 'content': event.delta.text})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        finally:
+            await db.close()
 
     return StreamingResponse(stream_future_self(), media_type="text/event-stream")
 
@@ -413,6 +448,7 @@ async def chat_mental(request: Request) -> StreamingResponse:
             data.get("user_id", "zahoor"),
             {"message": str(data.get("message", ""))[-1200:], "history": _trim_chat_history(data.get("history", []))},
             db,
+            close_db=True,
         ),
         media_type="text/event-stream",
     )
@@ -423,13 +459,22 @@ async def chat_coach(request: Request) -> StreamingResponse:
     """Coach SSE chat endpoint."""
 
     data = await request.json()
+    message = str(data.get("message", ""))[-1200:]
+    if not _is_coach_question_in_scope(message):
+        return StreamingResponse(
+            _stream_static_sse(
+                "I’m the EirView health coach. I can help with your metrics, habits, nutrition, sleep, activity, recovery, reminders, and next-step planning."
+            ),
+            media_type="text/event-stream",
+        )
     db = await get_db()
     return StreamingResponse(
         runner.stream_agent(
             coach,
             data.get("user_id", "zahoor"),
-            {"message": str(data.get("message", ""))[-1200:], "history": _trim_chat_history(data.get("history", []))},
+            {"message": message, "history": _trim_chat_history(data.get("history", []))},
             db,
+            close_db=True,
         ),
         media_type="text/event-stream",
     )
@@ -634,12 +679,13 @@ async def workout_targets_endpoint(user_id: str) -> dict[str, Any]:
 async def spotify_callback(code: str, state: str = "") -> dict[str, Any]:
     """Handle Spotify OAuth callback and sync data."""
 
-    from backend.spotify import sync_spotify
+    from backend.spotify import exchange_spotify_code, sync_spotify
 
     db = await get_db()
     try:
         user_id = state or "zahoor"
-        result = await sync_spotify(user_id, code, db)
+        access_token = exchange_spotify_code(code)
+        result = await sync_spotify(user_id, access_token, db)
         return {"success": True, "user_id": user_id, "spotify_data": result}
     finally:
         await db.close()
