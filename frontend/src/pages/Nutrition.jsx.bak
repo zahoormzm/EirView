@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { uploadMeal } from '../api';
+import ChatInterface from '../components/ChatInterface';
 import FileUpload from '../components/FileUpload';
 import MealAnalysis from '../components/MealAnalysis';
 import NutritionTargets from '../components/NutritionTargets';
@@ -10,6 +11,12 @@ export default function Nutrition() {
   const { dashboard, selectedUserId, showToast } = useStore();
   const [analysis, setAnalysis] = useState(null);
   const [description, setDescription] = useState('');
+  const nutritionContext = [
+    `User: ${selectedUserId}`,
+    `Nutrition targets: ${dashboard?.nutrition_targets ? JSON.stringify(dashboard.nutrition_targets) : 'unavailable'}`,
+    `Recent meals: ${(dashboard?.recent_meals || []).slice(0, 3).map((meal) => `${meal.description || 'Meal entry'} (${meal.calories || meal.nutrition?.calories || 0} cal)`).join('; ') || 'none logged'}`,
+    `Latest meal analysis: ${analysis ? JSON.stringify({ total: analysis.total, flags: analysis.flags, score: analysis.health_score || analysis.score }) : 'none yet on this page'}`
+  ].join('\n');
 
   const uploadPhoto = async (file) => {
     const formData = new FormData();
@@ -31,6 +38,19 @@ export default function Nutrition() {
     <div className="space-y-6">
       <NutritionTargets data={dashboard?.nutrition_targets} />
       <NutritionTracker />
+      <ChatInterface
+        chatType="coach"
+        userId={selectedUserId}
+        title="Nutrition Coach"
+        placeholder="Ask about your meals, targets, or what to eat next"
+        helperText="The coach uses your nutrition targets, recent meals, and the latest meal analysis on this page."
+        suggestedPrompts={[
+          'What should I eat next based on this analysis?',
+          'Where is this meal off relative to my targets?',
+          'How can I improve my protein and keep calories controlled?'
+        ]}
+        context={nutritionContext}
+      />
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-4">
         <FileUpload accept=".jpg,.jpeg,.png" label="Meal Photo" endpoint={uploadPhoto} onUpload={setAnalysis} />
         <div className="text-center text-slate-400 text-sm">-- or --</div>

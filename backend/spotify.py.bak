@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
+import time
 from typing import Any
 
 try:
@@ -13,23 +17,82 @@ except Exception:  # pragma: no cover - optional dependency
 
 from backend.database import get_profile_dict
 
-if SpotifyOAuth is not None:
-    sp_oauth: Any = SpotifyOAuth(
-        client_id=os.getenv("SPOTIFY_CLIENT_ID", ""),
-        client_secret=os.getenv("SPOTIFY_CLIENT_SECRET", ""),
-        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5173/callback"),
-        scope="user-read-recently-played",
-    )
-else:
-    class _FallbackSpotifyOAuth:
-        """Fallback OAuth helper when spotipy is unavailable."""
+SPOTIFY_STATE_SECRET = os.getenv("SPOTIFY_STATE_SECRET") or os.getenv("SPOTIFY_CLIENT_SECRET", "eirview-spotify-state")
+SPOTIFY_STATE_TTL_SECONDS = 900
 
-        def get_authorize_url(self, state: str = "") -> str:
-            """Return a placeholder auth URL."""
+class _FallbackSpotifyOAuth:
+    """Fallback OAuth helper when Spotify OAuth is unavailable."""
 
-            return f"/spotify-auth-unavailable?state={state}"
+    def get_authorize_url(self, state: str = "") -> str:
+        """Return a placeholder auth URL."""
 
-    sp_oauth = _FallbackSpotifyOAuth()
+        return f"/spotify-auth-unavailable?state={state}"
+
+
+def _build_spotify_oauth() -> Any:
+    if SpotifyOAuth is None:
+        return _FallbackSpotifyOAuth()
+    client_id = os.getenv("SPOTIFY_CLIENT_ID", "")
+    client_secret = os.getenv("SPOTIFY_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return _FallbackSpotifyOAuth()
+    try:
+        return SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5173/callback"),
+            scope="user-read-recently-played",
+        )
+    except Exception:
+        return _FallbackSpotifyOAuth()
+
+
+sp_oauth: Any = _build_spotify_oauth()
+
+
+def generate_spotify_oauth_state(user_id: str) -> str:
+    """Create a signed short-lived OAuth state that encodes the user id."""
+
+    issued_at = str(int(time.time()))
+    payload = f"{user_id}:{issued_at}"
+    signature = hmac.new(SPOTIFY_STATE_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
+    token = base64.urlsafe_b64encode(f"{payload}:{signature}".encode("utf-8")).decode("utf-8").rstrip("=")
+    return token
+
+
+def resolve_spotify_oauth_state(state: str) -> str:
+    """Validate and decode the Spotify OAuth state token."""
+
+    if not state:
+        raise ValueError("Missing Spotify OAuth state")
+    padded = state + "=" * (-len(state) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+        user_id, issued_at, signature = decoded.split(":", 2)
+    except Exception as exc:
+        raise ValueError("Invalid Spotify OAuth state") from exc
+    payload = f"{user_id}:{issued_at}"
+    expected = hmac.new(SPOTIFY_STATE_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
+    if not hmac.compare_digest(signature, expected):
+        raise ValueError("Invalid Spotify OAuth state signature")
+    if int(time.time()) - int(issued_at) > SPOTIFY_STATE_TTL_SECONDS:
+        raise ValueError("Spotify OAuth state expired")
+    return user_id
+
+
+def exchange_spotify_code(code: str) -> str:
+    """Exchange an OAuth authorization code for an access token."""
+
+    if spotipy is None or not hasattr(sp_oauth, "get_access_token"):
+        raise RuntimeError("Spotify OAuth is unavailable")
+    token_info = sp_oauth.get_access_token(code, check_cache=False)
+    if isinstance(token_info, dict):
+        access_token = token_info.get("access_token")
+    else:
+        access_token = token_info
+    if not access_token:
+        raise RuntimeError("Spotify token exchange failed")
+    return str(access_token)
 
 
 async def sync_spotify(user_id: str, token: str, db: Any) -> dict:

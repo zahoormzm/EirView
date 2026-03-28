@@ -19,7 +19,7 @@ export default function Transparency() {
   }, [selectedUserId, showToast]);
 
   const cards = [
-    ['Claude 4.6', data?.model_stats?.claude || {}, 'bg-blue-50 border-blue-200'],
+    ['Claude Sonnet 4', data?.model_stats?.claude || {}, 'bg-blue-50 border-blue-200'],
     ['Gemini 2.5 Flash', data?.model_stats?.gemini || {}, 'bg-purple-50 border-purple-200'],
     ['Deterministic', data?.model_stats?.deterministic || {}, 'bg-slate-50 border-slate-200']
   ];

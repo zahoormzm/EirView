@@ -17,6 +17,38 @@ WORKOUT_IMPACT_MAP: dict[str, dict[str, float]] = {
     "cycling": {"cv": -0.25, "msk": -0.1},
 }
 
+WORKOUT_MATCH_MAP: dict[str, set[str]] = {
+    "walking": {"walking"},
+    "running": {"running"},
+    "cycling": {"cycling"},
+    "swimming": {"swimming"},
+    "yoga": {"yoga"},
+    "strength": {"strength", "weight_training"},
+    "weight_training": {"strength", "weight_training"},
+    "hiit": {"hiit"},
+}
+
+
+def _target_sessions_from_frequency(frequency: str) -> int:
+    """Convert target frequency text like '5x/week' into a session count."""
+
+    normalized = str(frequency or "").strip().lower()
+    if normalized == "daily":
+        return 7
+    if normalized.endswith("x/week"):
+        try:
+            return max(1, int(normalized.split("x/week")[0]))
+        except ValueError:
+            return 1
+    return 1
+
+
+def _matching_workout_types(target_type: str) -> set[str]:
+    """Return workout types that count toward a target session type."""
+
+    normalized = str(target_type or "").strip().lower().replace(" ", "_")
+    return WORKOUT_MATCH_MAP.get(normalized, {normalized})
+
 
 async def log_workout(user_id: str, workout_data: dict[str, Any], db: aiosqlite.Connection) -> dict[str, Any]:
     """Log a workout with computed bio-age impacts."""
@@ -118,7 +150,39 @@ async def get_workout_targets(user_id: str, db: aiosqlite.Connection) -> dict[st
             (user_id,),
         )
     ).fetchone()
-    return workout_targets(dict(row) if row else {})
+    targets = workout_targets(dict(row) if row else {})
+    since = str(date.today() - timedelta(days=6))
+    workout_rows = await (
+        await db.execute("SELECT * FROM workouts WHERE user_id=? AND date>=? ORDER BY date DESC, timestamp DESC", (user_id, since))
+    ).fetchall()
+    workouts = [dict(item) for item in workout_rows]
+    enriched_sessions: list[dict[str, Any]] = []
+    for session in targets.get("recommended_sessions", []):
+        matches = _matching_workout_types(session.get("type", ""))
+        completed_workouts = [item for item in workouts if str(item.get("type", "")).lower() in matches]
+        target_sessions = _target_sessions_from_frequency(session.get("frequency", "1x/week"))
+        completed_sessions = len(completed_workouts)
+        completed_minutes = sum(int(item.get("duration_min") or 0) for item in completed_workouts)
+        target_minutes = int(target_sessions * int(session.get("duration_min") or 0))
+        completion_ratio = min(completed_sessions / max(target_sessions, 1), 1.0)
+        remaining_sessions = max(target_sessions - completed_sessions, 0)
+        enriched_sessions.append(
+            {
+                **session,
+                "target_sessions": target_sessions,
+                "completed_sessions": completed_sessions,
+                "remaining_sessions": remaining_sessions,
+                "completed_minutes": completed_minutes,
+                "target_minutes": target_minutes,
+                "completion_ratio": round(completion_ratio, 3),
+                "status": "complete" if completed_sessions >= target_sessions else "in_progress" if completed_sessions > 0 else "not_started",
+                "counts_workout_types": sorted(matches),
+                "last_logged_at": completed_workouts[0]["date"] if completed_workouts else None,
+            }
+        )
+    targets["recommended_sessions"] = enriched_sessions
+    targets["tracking_window_days"] = 7
+    return targets
 
 
 def check_inactivity(profile: dict[str, Any], current_hour: int) -> dict[str, Any] | None:

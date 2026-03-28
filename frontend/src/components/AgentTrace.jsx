@@ -4,6 +4,11 @@ export default function AgentTrace({ data = [] }) {
   const [open, setOpen] = useState(null);
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 overflow-x-auto">
+      {!data.length && (
+        <div className="text-sm text-slate-500 mb-4">
+          No stored agent traces yet. Use Coach, Mental Health, Future Self, uploads that invoke agents, or wait for live model calls below.
+        </div>
+      )}
       <table className="w-full">
         <thead>
           <tr>
@@ -32,7 +37,6 @@ export default function AgentTrace({ data = [] }) {
           })}
         </tbody>
       </table>
-      <button className="border border-slate-300 text-slate-700 rounded-lg px-4 py-2 hover:bg-slate-50 mt-4">Load More</button>
     </div>
   );
 }

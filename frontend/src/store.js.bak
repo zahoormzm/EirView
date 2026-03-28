@@ -10,7 +10,14 @@ const useStore = create((set) => ({
   alerts: [],
   loading: false,
   toast: null,
-  setSelectedUser: (id) => set({ selectedUserId: id }),
+  setSelectedUser: (id) => set((state) => state.selectedUserId === id ? state : {
+    selectedUserId: id,
+    profile: null,
+    dashboard: null,
+    gamification: null,
+    reminders: [],
+    alerts: []
+  }),
   setUsers: (users) => set({ users }),
   setProfile: (profile) => set({ profile }),
   setDashboard: (dashboard) => set({ dashboard }),

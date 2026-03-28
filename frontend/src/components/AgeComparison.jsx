@@ -1,10 +1,10 @@
 import useStore from '../store';
 
-export default function AgeComparison({ data }) {
+export default function AgeComparison({ data, compact = false }) {
   const { dashboard } = useStore();
   const source = data || dashboard;
   if (!source) {
-    return <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-[360px] animate-pulse bg-slate-200" />;
+    return <div className={`bg-white rounded-xl shadow-sm border border-slate-200 ${compact ? 'p-4 h-[250px]' : 'p-6 h-[360px]'} animate-pulse bg-slate-200`} />;
   }
   const chrono = source.profile?.age || 0;
   const bioAge = source.bio_age_overall || source.bio_age?.overall || 0;
@@ -18,17 +18,17 @@ export default function AgeComparison({ data }) {
   const diff = (chrono - bioAge).toFixed(1);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-      <div className="flex items-end justify-center gap-8 h-[280px]">
+    <div className={`bg-white rounded-xl shadow-sm border border-slate-200 ${compact ? 'p-4' : 'p-6'}`}>
+      <div className={`flex items-end justify-center ${compact ? 'gap-4 h-[170px]' : 'gap-8 h-[280px]'}`}>
         {bars.map((bar) => (
           <div key={bar.label} className="flex flex-col items-center justify-end h-full">
-            <div className={`w-16 rounded-t-lg ${bar.className}`} style={{ height: `${(bar.value / maxVal) * 100}%` }} />
-            <div className="font-mono font-medium text-lg text-slate-900 mt-3">{bar.display || bar.value?.toFixed?.(1) || bar.value}</div>
+            <div className={`${compact ? 'w-10' : 'w-16'} rounded-t-lg ${bar.className}`} style={{ height: `${(bar.value / maxVal) * 100}%` }} />
+            <div className={`font-mono font-medium ${compact ? 'text-base mt-2' : 'text-lg mt-3'} text-slate-900`}>{bar.display || bar.value?.toFixed?.(1) || bar.value}</div>
             <div className="text-xs text-slate-500 mt-1">{bar.label}</div>
           </div>
         ))}
       </div>
-      <p className={`mt-4 text-sm font-medium ${bioAge < chrono ? 'text-emerald-600' : 'text-red-600'}`}>
+      <p className={`mt-3 ${compact ? 'text-xs' : 'text-sm'} font-medium ${bioAge < chrono ? 'text-emerald-600' : 'text-red-600'}`}>
         {bioAge < chrono ? `You are ${diff} years younger than your biological age` : `You are ${(bioAge - chrono).toFixed(1)} years older biologically`}
       </p>
     </div>

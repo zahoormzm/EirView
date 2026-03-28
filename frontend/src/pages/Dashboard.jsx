@@ -30,24 +30,33 @@ export default function Dashboard() {
   ];
 
   return (
-    <div>
-      <ReminderCards />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <AgeComparison />
-        <div className="lg:col-span-2"><SubSystemAges /></div>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        {metricCards.map(([label, value, unit, icon, status]) => <MetricCard key={label} label={label} value={value} unit={unit} icon={icon} status={status} />)}
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <StepProgressRing current={dashboard.metrics.steps || 0} goal={dashboard.step_goal || 7500} size={200} />
-        <div className="lg:col-span-2 space-y-6">
-          <WorkoutSummary summary={dashboard.workout_summary} />
-          <ActivityNudge currentSteps={dashboard.metrics.steps || 0} stepGoal={dashboard.step_goal || 7500} message={dashboard.activity_nudge?.message} />
+    <div className="space-y-4">
+      <ReminderCards compact />
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <div className="xl:col-span-3">
+          <AgeComparison compact />
+        </div>
+        <div className="xl:col-span-5">
+          <SubSystemAges compact />
+        </div>
+        <div className="xl:col-span-4 space-y-4">
+          <StepProgressRing current={dashboard.metrics.steps || 0} goal={dashboard.step_goal || 7500} size={150} compact />
+          <ActivityNudge currentSteps={dashboard.metrics.steps || 0} stepGoal={dashboard.step_goal || 7500} message={dashboard.activity_nudge?.message} compact />
         </div>
       </div>
-      <SpecialistCards />
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {metricCards.map(([label, value, unit, icon, status]) => <MetricCard key={label} label={label} value={value} unit={unit} icon={icon} status={status} compact />)}
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <div className="xl:col-span-7">
+          <WorkoutSummary summary={dashboard.workout_summary} compact />
+        </div>
+        <div className="xl:col-span-5">
+          <SpecialistCards compact />
+        </div>
+      </div>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">Cross-domain insight</div>
         <div className="text-sm text-slate-600 italic">{dashboard.cross_domain_insight}</div>
       </div>
     </div>

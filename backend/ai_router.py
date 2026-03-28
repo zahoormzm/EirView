@@ -5,6 +5,8 @@ import os
 import time
 from typing import Any
 
+from dotenv import load_dotenv
+
 try:
     import anthropic  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
@@ -14,6 +16,8 @@ try:
     import google.generativeai as genai  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     genai = None
+
+load_dotenv()
 
 
 class _FallbackUsage:

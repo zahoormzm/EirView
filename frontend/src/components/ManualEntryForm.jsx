@@ -17,7 +17,7 @@ function Section({ title, open, toggle, children }) {
 
 const inputClass = 'border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 w-full';
 
-export default function ManualEntryForm() {
+export default function ManualEntryForm({ refreshKey = 0 }) {
   const { selectedUserId, showToast, setProfile } = useStore();
   const [form, setForm] = useState({});
   const [open, setOpen] = useState({ blood: true, body: false, vitals: false, lifestyle: false, academic: true, family: false, contacts: false });
@@ -31,7 +31,7 @@ export default function ManualEntryForm() {
         showToast(error.message, 'error');
       }
     })();
-  }, [selectedUserId, showToast]);
+  }, [selectedUserId, showToast, refreshKey]);
 
   const setValue = (key, value) => setForm((previous) => ({ ...previous, [key]: value }));
   const fields = useMemo(() => ({

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import socket
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from backend.activity import check_inactivity, get_workout_summary, get_workouts, get_workout_targets, log_workout
 from backend.agents import coach, collector, mental_health, mirror, runner, time_machine
@@ -21,10 +24,12 @@ from backend.database import (
     get_all_users,
     get_db,
     get_meals,
+    get_posture_history,
     get_profile_dict,
     get_risk_projections,
     get_water_today,
     init_db,
+    log_posture,
     log_meal as db_log_meal,
     log_water as db_log_water,
     save_risk_projections,
@@ -33,12 +38,14 @@ from backend.database import (
 from backend.family import create_family, get_family_dashboard, join_family
 from backend.formulas import calculate_bio_age, mental_wellness_score, nutrition_targets, simulate_habit_change
 from backend.gamification import get_gamification_summary, get_leaderboard, process_action
-from backend.parsers import analyze_meal_photo, parse_apple_health_xml
+from backend.parsers import analyze_meal_photo, parse_apple_health_file, parse_apple_health_xml
 from backend.reports import build_doctor_report, render_doctor_report_text
-from backend.reminder_engine import check_reminders
+from backend.reminder_engine import check_reminders, get_data_freshness
 from backend.specialists import check_specialists
+from backend.posture_runner import analyze_posture_image
 
 load_dotenv()
+MOBILE_ENCRYPTION_KEY = b"healthhack2026secretkey123456789"
 
 CORS_ORIGINS = [
     origin.strip()
@@ -65,6 +72,47 @@ def _serialize_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{key: value for key, value in row.items()} for row in rows]
 
 
+def _detect_local_ips() -> list[str]:
+    """Return likely LAN IPs for mobile-device testing."""
+
+    ips: set[str] = set()
+    try:
+        hostname = socket.gethostname()
+        for item in socket.gethostbyname_ex(hostname)[2]:
+            if item and not item.startswith("127."):
+                ips.add(item)
+    except Exception:
+        pass
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("8.8.8.8", 80))
+        candidate = probe.getsockname()[0]
+        if candidate and not candidate.startswith("127."):
+            ips.add(candidate)
+        probe.close()
+    except Exception:
+        pass
+    return sorted(ips)
+
+
+async def _touch_data_source(db: Any, user_id: str, source: str, refresh_interval_days: int) -> None:
+    """Upsert exact sync timing for a user data source."""
+
+    await db.execute(
+        """
+        INSERT OR REPLACE INTO data_sources (user_id, source, last_synced_at, refresh_interval_days)
+        VALUES (
+            ?, ?, CURRENT_TIMESTAMP,
+            COALESCE(
+                (SELECT refresh_interval_days FROM data_sources WHERE user_id=? AND source=?),
+                ?
+            )
+        )
+        """,
+        (user_id, source, user_id, source, refresh_interval_days),
+    )
+
+
 def _trim_chat_history(history: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
     """Keep only the most recent chat turns and cap message length."""
 
@@ -84,14 +132,121 @@ COACH_ALLOWED_KEYWORDS = {
     "improve", "reduce", "increase", "lower", "raise"
 }
 
+MENTAL_ALLOWED_KEYWORDS = {
+    "stress", "stressed", "anxiety", "anxious", "panic", "panic attack", "burnout", "burned out", "mood", "sad",
+    "depressed", "low", "overwhelmed", "overwhelm", "lonely", "focus", "motivation", "mental", "emotion", "emotional",
+    "worry", "worried", "sleep", "rest", "tired", "fatigue", "coping", "cope", "journal", "mindfulness", "therapy",
+    "counselor", "counselling", "feel", "feeling", "feelings", "self care", "wellbeing", "wellness", "exam stress",
+    "study", "burn out", "routine", "spiraling", "spiral"
+}
+
+MENTAL_CRISIS_KEYWORDS = {
+    "suicide", "kill myself", "self harm", "hurt myself", "end my life", "want to die", "don't want to live",
+    "harm myself"
+}
+
+FUTURE_ALLOWED_KEYWORDS = {
+    "future", "years", "year", "later", "trajectory", "progress", "bio age", "biological age", "risk", "habit",
+    "habits", "sleep", "nutrition", "exercise", "workout", "training", "food", "diet", "meal", "cholesterol",
+    "ldl", "hdl", "glucose", "hba1c", "blood pressure", "weight", "bmi", "health", "wellness", "if i keep",
+    "what happens", "what will", "where will", "long term", "long-term", "path", "future self", "improve", "decline"
+}
+
+
+def _normalize_message(message: str) -> str:
+    """Return a normalized lowercased message for keyword checks."""
+
+    return " ".join(str(message or "").lower().split())
+
+
+def _has_scope_keyword(message: str, keywords: set[str]) -> bool:
+    """Return True when a normalized message contains any keyword."""
+
+    normalized = _normalize_message(message)
+    if not normalized:
+        return False
+    return any(keyword in normalized for keyword in keywords)
+
 
 def _is_coach_question_in_scope(message: str) -> bool:
     """Return True when the coach message is clearly about health coaching."""
 
-    normalized = " ".join(str(message or "").lower().split())
-    if not normalized:
-        return False
-    return any(keyword in normalized for keyword in COACH_ALLOWED_KEYWORDS)
+    return _has_scope_keyword(message, COACH_ALLOWED_KEYWORDS)
+
+
+def _is_mental_question_in_scope(message: str) -> bool:
+    """Return True when the mental-health message is about emotional wellbeing."""
+
+    return _has_scope_keyword(message, MENTAL_ALLOWED_KEYWORDS)
+
+
+def _is_future_question_in_scope(message: str) -> bool:
+    """Return True when the future-self message is about health trajectory."""
+
+    return _has_scope_keyword(message, FUTURE_ALLOWED_KEYWORDS)
+
+
+def _is_mental_crisis_message(message: str) -> bool:
+    """Return True when the message suggests immediate mental-health danger."""
+
+    return _has_scope_keyword(message, MENTAL_CRISIS_KEYWORDS)
+
+
+def _merge_chat_context(message: str, context: str) -> str:
+    """Prepend structured page context to the user message when provided."""
+
+    context_text = str(context or "").strip()[-2500:]
+    if not context_text:
+        return message
+    return f"Current EirView context:\n{context_text}\n\nUser question:\n{message}"
+
+
+def _future_system_prompt(name: str, age: int, overall_bio_age: float) -> str:
+    """Build a constrained future-self system prompt."""
+
+    return (
+        f"You are {name} at age {age + 15}, speaking to your younger self. Their bio age is {overall_bio_age}. "
+        "Only answer about health trajectory, habits, risk, progress, and long-term consequences of current choices. "
+        "If the user asks unrelated questions, briefly refuse and redirect to health progress and future outcomes. "
+        "Ground your answer in the user's available health context and be concrete, calm, and motivating."
+    )
+
+
+def _mental_out_of_scope_message() -> str:
+    """Return a short redirect for unrelated mental-chat questions."""
+
+    return (
+        "I’m the EirView mental wellness guide. I can help with stress, burnout, mood, routines, sleep-linked wellbeing, "
+        "and supportive reflection grounded in your health context."
+    )
+
+
+def _coach_out_of_scope_message() -> str:
+    """Return a short redirect for unrelated coach questions."""
+
+    return (
+        "I’m the EirView health coach. I can help with your metrics, habits, nutrition, sleep, activity, recovery, "
+        "reminders, and next-step planning."
+    )
+
+
+def _future_out_of_scope_message() -> str:
+    """Return a short redirect for unrelated future-self questions."""
+
+    return (
+        "I’m your EirView future-self guide. I can help you think through where your current health habits and metrics "
+        "are likely to lead over time."
+    )
+
+
+def _mental_crisis_message() -> str:
+    """Return a short immediate-support response for crisis language."""
+
+    return (
+        "I’m really sorry you’re dealing with this. I’m not a crisis service, so please contact local emergency help or a "
+        "trusted person right now and do not stay alone with these thoughts. If you can, go to the nearest emergency service "
+        "or ask someone nearby to stay with you while you get immediate help."
+    )
 
 
 async def _stream_static_sse(message: str) -> Any:
@@ -111,6 +266,439 @@ def _enrich_specialist_recommendations(profile: dict[str, Any], specialists: lis
     return enriched
 
 
+def _now_iso() -> str:
+    """Return an ISO-8601 timestamp in local time."""
+
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _mobile_error_response(status_code: int, code: str, message: str, retryable: bool = False) -> JSONResponse:
+    """Return a mobile-contract error response."""
+
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "error", "code": code, "message": message, "retryable": retryable},
+    )
+
+
+async def _decrypt_mobile_envelope(request: Request) -> dict[str, Any]:
+    """Decrypt an AES-GCM wrapped mobile request."""
+
+    envelope = await request.json()
+    if not isinstance(envelope, dict) or not envelope.get("encrypted"):
+        raise ValueError("Failed to decrypt request body. Check encryption key.")
+    try:
+        iv = base64.b64decode(envelope["iv"])
+        ciphertext = base64.b64decode(envelope["data"])
+        tag = base64.b64decode(envelope["tag"])
+        plaintext = AESGCM(MOBILE_ENCRYPTION_KEY).decrypt(iv, ciphertext + tag, None)
+        return json.loads(plaintext.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("Failed to decrypt request body. Check encryption key.") from exc
+
+
+def _mobile_healthkit_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return HealthKit-style summary fields from the canonical profile."""
+
+    return {
+        "resting_hr_bpm": profile.get("resting_hr"),
+        "hrv_sdnn_ms": profile.get("hrv_ms"),
+        "steps_avg_7d": profile.get("steps_avg_7d"),
+        "sleep_hours": profile.get("sleep_hours"),
+        "active_energy_kcal": profile.get("active_energy_kcal"),
+        "exercise_min_today": profile.get("exercise_min"),
+        "vo2max_ml_kg_min": profile.get("vo2max"),
+        "respiratory_rate_bpm": profile.get("respiratory_rate"),
+        "walking_asymmetry_pct": profile.get("walking_asymmetry_pct"),
+        "flights_climbed_today": profile.get("flights_climbed"),
+        "body_mass_kg": profile.get("weight_kg"),
+        "height_cm": profile.get("height_cm"),
+        "blood_oxygen_pct": profile.get("blood_oxygen_pct"),
+    }
+
+
+def _mobile_manual_inputs(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return the mobile manual-input grouping from the canonical profile."""
+
+    return {
+        "blood": {
+            "ldl": profile.get("ldl"),
+            "hdl": profile.get("hdl"),
+            "triglycerides": profile.get("triglycerides"),
+            "total_cholesterol": profile.get("total_cholesterol"),
+            "vitamin_d": profile.get("vitamin_d"),
+            "b12": profile.get("b12"),
+            "tsh": profile.get("tsh"),
+            "ferritin": profile.get("ferritin"),
+            "fasting_glucose": profile.get("fasting_glucose"),
+            "hba1c": profile.get("hba1c"),
+            "hemoglobin": profile.get("hemoglobin"),
+            "creatinine": profile.get("creatinine"),
+            "sgpt_alt": profile.get("sgpt_alt"),
+            "sgot_ast": profile.get("sgot_ast"),
+        },
+        "body": {
+            "weight_kg": profile.get("weight_kg"),
+            "bmi": profile.get("bmi"),
+            "bmr": profile.get("bmr"),
+            "body_fat_pct": profile.get("body_fat_pct"),
+            "visceral_fat_kg": profile.get("visceral_fat_kg"),
+            "muscle_mass_kg": profile.get("muscle_mass_kg"),
+            "body_water_pct": profile.get("body_water_pct"),
+            "protein_kg": profile.get("protein_kg"),
+            "bone_mass_kg": profile.get("bone_mass_kg"),
+            "body_age_device": profile.get("body_age_device"),
+        },
+        "lifestyle": {
+            "exercise_hours_week": profile.get("exercise_hours_week"),
+            "sleep_target": profile.get("sleep_target"),
+            "smoking": profile.get("smoking"),
+            "diet_quality": profile.get("diet_quality"),
+            "stress_level": profile.get("stress_level"),
+            "screen_time_hours": profile.get("screen_time_hours"),
+        },
+        "family_history": {
+            "diabetes": bool(profile.get("family_diabetes")),
+            "heart_disease": bool(profile.get("family_heart")),
+            "hypertension": bool(profile.get("family_hypertension")),
+            "mental_health": bool(profile.get("family_mental")),
+        },
+    }
+
+
+def _mobile_source_status(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return lightweight mobile source-status metadata."""
+
+    return {
+        "healthkit": {"present": any(profile.get(key) is not None for key in ("resting_hr", "steps_avg_7d", "sleep_hours")), "last_sync": profile.get("updated_at")},
+        "blood_report": {"present": any(profile.get(key) is not None for key in ("ldl", "hdl", "vitamin_d", "hba1c")), "last_sync": profile.get("last_blood_report_date")},
+        "cultfit": {"present": any(profile.get(key) is not None for key in ("body_fat_pct", "muscle_mass_kg", "visceral_fat_kg")), "last_sync": profile.get("updated_at")},
+        "face_age": {"present": profile.get("face_age") is not None, "last_sync": profile.get("updated_at") if profile.get("face_age") is not None else None},
+        "posture": {"present": profile.get("posture_score_pct") is not None, "last_sync": profile.get("updated_at") if profile.get("posture_score_pct") is not None else None},
+    }
+
+
+def _mobile_missing_fields(profile: dict[str, Any]) -> list[str]:
+    """Return the key missing fields expected by the mobile app."""
+
+    fields = ["vo2max", "blood_pressure_systolic", "blood_pressure_diastolic", "fasting_glucose"]
+    return [field for field in fields if profile.get(field) is None]
+
+
+def _mobile_profile_version(profile: dict[str, Any]) -> str:
+    """Generate a profile version string from the latest update timestamp."""
+
+    timestamp = str(profile.get("updated_at") or _now_iso())
+    digits = "".join(char for char in timestamp if char.isdigit())
+    return f"v{digits[:14] or '0'}"
+
+
+def _top_wellness_labels(wellness: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return top concern and top strength labels from the wellness breakdown."""
+
+    breakdown = wellness.get("breakdown", {})
+    if not breakdown:
+        return None, None
+    concern = max(breakdown.items(), key=lambda item: item[1])[0]
+    strength = min(breakdown.items(), key=lambda item: item[1])[0]
+    return concern, strength
+
+
+def _mobile_metric_status(label: str, value: Any, unit: str, status: str) -> dict[str, Any]:
+    """Build one mobile metric status row."""
+
+    return {"label": label, "value": value, "unit": unit, "status": status}
+
+
+def _safe_float(value: Any) -> float | None:
+    """Convert a value to float when possible."""
+
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _build_dashboard_narrative(profile: dict[str, Any], bio_age: dict[str, Any], risk_rows: list[dict[str, Any]], wellness: dict[str, Any]) -> str:
+    """Build a profile-specific Insights narrative."""
+
+    chrono = _safe_float(profile.get("age")) or 0
+    overall = _safe_float(bio_age.get("overall")) or chrono
+    gap = round(overall - chrono, 1)
+    ten_year = next((row for row in risk_rows if int(row.get("year", 0)) == 10), risk_rows[-1] if risk_rows else {})
+    risk_candidates = [
+        ("diabetes risk", _safe_float(ten_year.get("diabetes_risk"))),
+        ("heart risk", _safe_float(ten_year.get("cvd_risk"))),
+        ("metabolic risk", _safe_float(ten_year.get("metabolic_risk"))),
+        ("cognitive risk", _safe_float(ten_year.get("mental_decline_risk"))),
+    ]
+    top_risk_label, top_risk_value = max(risk_candidates, key=lambda item: item[1] if item[1] is not None else -1)
+    top_change = (bio_age.get("contributing_factors") or [{}])[0]
+    top_change_text = top_change.get("change")
+    top_change_gain = top_change.get("estimated_bio_age_reduction")
+
+    if gap <= -0.5:
+        age_open = f"Your biological age is {overall:.1f}, about {abs(gap):.1f} years younger than your chronological age of {chrono:.0f}."
+    elif gap >= 0.5:
+        age_open = f"Your biological age is {overall:.1f}, about {gap:.1f} years older than your chronological age of {chrono:.0f}."
+    else:
+        age_open = f"Your biological age is {overall:.1f}, almost aligned with your chronological age of {chrono:.0f}."
+
+    subsystem_ages = {
+        "cardiovascular": _safe_float(bio_age.get("cardiovascular")),
+        "metabolic": _safe_float(bio_age.get("metabolic")),
+        "musculoskeletal": _safe_float(bio_age.get("musculoskeletal")),
+        "neurological": _safe_float(bio_age.get("neurological")),
+    }
+    weakest_system = max(subsystem_ages.items(), key=lambda item: item[1] if item[1] is not None else -999)[0]
+    strongest_system = min(subsystem_ages.items(), key=lambda item: item[1] if item[1] is not None else 999)[0]
+
+    risk_text = ""
+    if top_risk_value is not None:
+        risk_text = f" On your current trajectory, your highest modeled 10-year issue is {top_risk_label} at about {top_risk_value * 100:.1f}%."
+
+    leverage_text = ""
+    if top_change_text:
+        leverage_text = (
+            f" The biggest lever right now is {top_change_text.lower()},"
+            f" worth about {float(top_change_gain):.1f} years of biological-age improvement."
+            if top_change_gain is not None
+            else f" The biggest lever right now is {top_change_text.lower()}."
+        )
+
+    wellness_score = _safe_float(wellness.get("score"))
+    wellness_text = f" Your current mental wellness score is {wellness_score:.1f}/100." if wellness_score is not None else ""
+
+    return (
+        f"{age_open} Your strongest subsystem is {strongest_system}, while {weakest_system} is currently the main drag."
+        f"{risk_text}{leverage_text}{wellness_text}"
+    )
+
+
+def _build_simulation_narrative(profile: dict[str, Any], changes: dict[str, Any], simulation: dict[str, Any]) -> str:
+    """Build a deterministic scenario summary from the simulated deltas."""
+
+    current = simulation.get("current", {})
+    projected = simulation.get("projected", {})
+    improvement = _safe_float(simulation.get("improvement")) or 0.0
+    overall_current = _safe_float(current.get("overall")) or 0.0
+    overall_projected = _safe_float(projected.get("overall")) or overall_current
+    changed_inputs: list[str] = []
+    if "sleep" in changes:
+        changed_inputs.append(f"sleep from {(_safe_float(profile.get('sleep_hours')) or 0):.1f}h to {(_safe_float(changes.get('sleep')) or 0):.1f}h")
+    if "exercise" in changes:
+        changed_inputs.append(f"exercise from {(_safe_float(profile.get('exercise_hours_week')) or 0):.1f} to {(_safe_float(changes.get('exercise')) or 0):.1f} hours/week")
+    if "diet" in changes:
+        diet_labels = {1: "poor", 2: "average", 3: "good", 4: "excellent"}
+        changed_inputs.append(
+            f"diet quality from {str(profile.get('diet_quality') or 'average').lower()} to {diet_labels.get(int(changes.get('diet', 2)), 'average')}"
+        )
+    if "stress" in changes:
+        changed_inputs.append(f"stress from {(_safe_float(profile.get('stress_level')) or 0):.0f}/10 to {(_safe_float(changes.get('stress')) or 0):.0f}/10")
+    if "screen_time" in changes:
+        changed_inputs.append(
+            f"screen time from {(_safe_float(profile.get('screen_time_hours')) or 0):.0f}h to {(_safe_float(changes.get('screen_time')) or 0):.0f}h"
+        )
+    if "exam_stress" in changes:
+        changed_inputs.append(
+            f"academic stress from {(_safe_float(profile.get('exam_stress')) or 0):.0f}/10 to {(_safe_float(changes.get('exam_stress')) or 0):.0f}/10"
+        )
+
+    subsystem_deltas = [
+        ("cardiovascular", (_safe_float(projected.get("cardiovascular")) or 0.0) - (_safe_float(current.get("cardiovascular")) or 0.0)),
+        ("metabolic", (_safe_float(projected.get("metabolic")) or 0.0) - (_safe_float(current.get("metabolic")) or 0.0)),
+        ("musculoskeletal", (_safe_float(projected.get("musculoskeletal")) or 0.0) - (_safe_float(current.get("musculoskeletal")) or 0.0)),
+        ("neurological", (_safe_float(projected.get("neurological")) or 0.0) - (_safe_float(current.get("neurological")) or 0.0)),
+    ]
+    top_subsystem, top_subsystem_delta = max(subsystem_deltas, key=lambda item: abs(item[1]))
+
+    current_ten_year = next((row for row in simulation.get("new_risk_projections", []) if int(row.get("year", 0)) == 10), None)
+    baseline_ten_year = project_risk(profile, years=15)
+    baseline_ten_year = next((row for row in baseline_ten_year if int(row.get("year", 0)) == 10), None)
+    risk_shift_text = ""
+    if current_ten_year and baseline_ten_year:
+        risk_deltas = [
+            ("diabetes risk", ((_safe_float(current_ten_year.get("diabetes_risk")) or 0.0) - (_safe_float(baseline_ten_year.get("diabetes_risk")) or 0.0)) * 100),
+            ("heart risk", ((_safe_float(current_ten_year.get("cvd_risk")) or 0.0) - (_safe_float(baseline_ten_year.get("cvd_risk")) or 0.0)) * 100),
+            ("metabolic risk", ((_safe_float(current_ten_year.get("metabolic_risk")) or 0.0) - (_safe_float(baseline_ten_year.get("metabolic_risk")) or 0.0)) * 100),
+            ("cognitive risk", ((_safe_float(current_ten_year.get("mental_decline_risk")) or 0.0) - (_safe_float(baseline_ten_year.get("mental_decline_risk")) or 0.0)) * 100),
+        ]
+        top_risk, top_risk_delta = max(risk_deltas, key=lambda item: abs(item[1]))
+        if abs(top_risk_delta) >= 0.05:
+            direction = "higher" if top_risk_delta > 0 else "lower"
+            risk_shift_text = f" The clearest 10-year change is {top_risk}, moving {abs(top_risk_delta):.1f} points {direction}."
+
+    change_text = f"You tested {', '.join(changed_inputs)}." if changed_inputs else "You tested a hypothetical lifestyle change."
+    direction_text = (
+        f" That improves projected biological age from {overall_current:.1f} to {overall_projected:.1f}, making you {improvement:.1f} years biologically younger."
+        if improvement > 0
+        else f" That worsens projected biological age from {overall_current:.1f} to {overall_projected:.1f}, making you {abs(improvement):.1f} years biologically older."
+        if improvement < 0
+        else f" That leaves projected biological age flat at {overall_projected:.1f}."
+    )
+    subsystem_text = (
+        f" The biggest subsystem movement is {top_subsystem}, shifting by {abs(top_subsystem_delta):.1f} years "
+        f"{'worse' if top_subsystem_delta > 0 else 'better' if top_subsystem_delta < 0 else 'with no material change'}."
+    )
+    return f"{change_text}{direction_text}{subsystem_text}{risk_shift_text}"
+
+
+def _build_cross_domain_insight(profile: dict[str, Any], bio_age: dict[str, Any]) -> str:
+    """Build a specific cross-domain insight from available profile signals."""
+
+    sleep_hours = _safe_float(profile.get("sleep_hours"))
+    steps_avg = _safe_float(profile.get("steps_avg_7d"))
+    hrv = _safe_float(profile.get("hrv_ms"))
+    ldl = _safe_float(profile.get("ldl"))
+    exam_stress = _safe_float(profile.get("exam_stress"))
+
+    if sleep_hours is not None and sleep_hours < 6 and steps_avg is not None and steps_avg < 8000:
+        return (
+            f"You are averaging {sleep_hours:.1f} hours of sleep and {steps_avg:.0f} daily steps. "
+            "That combination is likely pushing both neurological recovery and metabolic risk in the wrong direction."
+        )
+    if ldl is not None and ldl > 130 and sleep_hours is not None and sleep_hours < 7:
+        return (
+            f"Your LDL at {ldl:.0f} mg/dL plus short sleep around {sleep_hours:.1f} hours suggests cardiovascular recovery is under more strain than your age alone would imply."
+        )
+    if hrv is not None and hrv < 30 and exam_stress is not None and exam_stress > 7:
+        return (
+            f"Your HRV is {hrv:.1f} ms while academic stress is {exam_stress:.0f}/10. "
+            "That pattern suggests recovery load is high and stress management may now matter as much as exercise volume."
+        )
+    top_change = (bio_age.get("contributing_factors") or [{}])[0].get("change")
+    if top_change:
+        return f"Your current data suggests the clearest next-step leverage comes from {top_change.lower()}."
+    return "Your available data is stable overall, but the next useful improvement will become clearer as you log more sleep, activity, and lab data."
+
+
+def _today_nutrition_progress(meals: list[dict[str, Any]]) -> dict[str, float]:
+    """Aggregate today's consumed meal totals for dashboard nutrition bars."""
+
+    today = date.today().isoformat()
+    totals = {
+        "current_calories": 0.0,
+        "current_protein_g": 0.0,
+        "current_carbs_g": 0.0,
+        "current_fat_g": 0.0,
+        "current_sat_fat_g": 0.0,
+        "current_fiber_g": 0.0,
+    }
+    for meal in meals:
+        timestamp = str(meal.get("timestamp") or meal.get("date") or "")
+        if not timestamp.startswith(today):
+            continue
+        totals["current_calories"] += float(meal.get("calories") or meal.get("nutrition", {}).get("calories") or 0)
+        totals["current_protein_g"] += float(meal.get("protein_g") or meal.get("nutrition", {}).get("protein_g") or 0)
+        totals["current_carbs_g"] += float(meal.get("carbs_g") or meal.get("nutrition", {}).get("carbs_g") or 0)
+        totals["current_fat_g"] += float(meal.get("fat_g") or meal.get("nutrition", {}).get("fat_g") or 0)
+        totals["current_sat_fat_g"] += float(meal.get("saturated_fat_g") or meal.get("sat_fat_g") or meal.get("nutrition", {}).get("sat_fat_g") or 0)
+        totals["current_fiber_g"] += float(meal.get("fiber_g") or meal.get("nutrition", {}).get("fiber_g") or 0)
+    return {key: round(value, 1) for key, value in totals.items()}
+
+
+def _mobile_dashboard_payload(profile: dict[str, Any], risk_rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Build the mobile dashboard response shape from the canonical profile."""
+
+    bio_age = calculate_bio_age(profile)
+    wellness = mental_wellness_score(profile)
+    top_concern, top_strength = _top_wellness_labels(wellness)
+    rows = risk_rows or []
+    ten_year = next((row for row in rows if int(row.get("year", 0)) == 10), rows[-1] if rows else {})
+    recommendations = [item.get("change") for item in bio_age.get("contributing_factors", [])[:3] if item.get("change")]
+    metrics = [
+        _mobile_metric_status("Resting HR", profile.get("resting_hr"), "bpm", "good" if (profile.get("resting_hr") or 999) < 70 else "warning"),
+        _mobile_metric_status("HRV", profile.get("hrv_ms"), "ms", "good" if (profile.get("hrv_ms") or 0) >= 40 else "warning"),
+        _mobile_metric_status("Steps (7d avg)", profile.get("steps_avg_7d"), "steps", "good" if (profile.get("steps_avg_7d") or 0) >= 7500 else "warning"),
+        _mobile_metric_status("Sleep", profile.get("sleep_hours"), "hours", "good" if (profile.get("sleep_hours") or 0) >= 7 else "warning"),
+        _mobile_metric_status("LDL", profile.get("ldl"), "mg/dL", "elevated" if (profile.get("ldl") or 0) >= 120 else "good"),
+        _mobile_metric_status("Vitamin D", profile.get("vitamin_d"), "ng/mL", "deficient" if (profile.get("vitamin_d") or 999) < 20 else "good"),
+    ]
+    return {
+        "chronological_age": profile.get("age"),
+        "biological_age": bio_age["overall"],
+        "subsystem_ages": {
+            "cardiovascular": bio_age["cardiovascular"],
+            "metabolic": bio_age["metabolic"],
+            "musculoskeletal": bio_age["musculoskeletal"],
+            "neurological": bio_age["neurological"],
+        },
+        "risk_summary": {
+            "diabetes_10yr": ten_year.get("diabetes_risk"),
+            "cvd_10yr": ten_year.get("cvd_risk"),
+            "metabolic_10yr": ten_year.get("metabolic_risk"),
+        },
+        "wellness_summary": {
+            "mental_wellness_score": wellness.get("score"),
+            "top_concern": top_concern,
+            "top_strength": top_strength,
+        },
+        "key_metrics": metrics,
+        "recommendation_summary": recommendations,
+        "updated_at": profile.get("updated_at"),
+    }
+
+
+def _mobile_profile_summary(profile: dict[str, Any]) -> dict[str, Any]:
+    """Build the mobile profile summary shape."""
+
+    source_status = _mobile_source_status(profile)
+    present = [name for name, meta in source_status.items() if meta["present"]]
+    missing = [name for name, meta in source_status.items() if not meta["present"]]
+    completeness_denominator = 4
+    completeness = round(len(present) / completeness_denominator * 100)
+    return {
+        "sources_present": present,
+        "sources_missing": missing,
+        "data_completeness_pct": completeness,
+    }
+
+
+def _mobile_profile_updates_from_sync(payload: dict[str, Any]) -> dict[str, Any]:
+    """Flatten mobile sync payload into canonical profile fields."""
+
+    updates: dict[str, Any] = {}
+    healthkit = payload.get("healthkit") or {}
+    sleep = healthkit.get("sleep_last_night") or {}
+    updates.update(
+        {
+            "resting_hr": healthkit.get("resting_hr_bpm"),
+            "hrv_ms": healthkit.get("hrv_sdnn_ms"),
+            "steps_today": healthkit.get("steps_today"),
+            "steps_avg_7d": healthkit.get("steps_avg_7d"),
+            "active_energy_kcal": healthkit.get("active_energy_kcal"),
+            "exercise_min": healthkit.get("exercise_min_today"),
+            "vo2max": healthkit.get("vo2max_ml_kg_min"),
+            "respiratory_rate": healthkit.get("respiratory_rate_bpm"),
+            "walking_asymmetry_pct": healthkit.get("walking_asymmetry_pct"),
+            "flights_climbed": healthkit.get("flights_climbed_today"),
+            "weight_kg": healthkit.get("body_mass_kg"),
+            "blood_pressure_systolic": healthkit.get("blood_pressure_systolic"),
+            "blood_pressure_diastolic": healthkit.get("blood_pressure_diastolic"),
+            "blood_oxygen_pct": healthkit.get("blood_oxygen_pct"),
+            "sleep_hours": sleep.get("total_hours"),
+            "sleep_deep_pct": sleep.get("deep_pct"),
+            "sleep_rem_pct": sleep.get("rem_pct"),
+        }
+    )
+    manual = payload.get("manual_inputs") or {}
+    updates.update(manual.get("blood") or {})
+    updates.update(manual.get("body") or {})
+    updates.update(manual.get("lifestyle") or {})
+    family_history = manual.get("family_history") or {}
+    updates.update(
+        {
+            "family_diabetes": family_history.get("diabetes"),
+            "family_heart": family_history.get("heart_disease"),
+            "family_hypertension": family_history.get("hypertension"),
+            "family_mental": family_history.get("mental_health"),
+        }
+    )
+    return {key: value for key, value in updates.items() if value is not None}
+
+
 @app.get("/api/users")
 async def list_users() -> list[dict[str, Any]]:
     """List all users."""
@@ -127,6 +715,209 @@ async def create_user_endpoint(request: Request) -> dict[str, Any]:
         return await create_user(data["id"], data["name"], data.get("age"), data.get("sex"), data.get("height_cm"))
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"Missing field: {exc}") from exc
+
+
+@app.get("/api/mobile/health")
+async def mobile_health() -> dict[str, Any]:
+    """Lightweight health check for the iOS app."""
+
+    return {"status": "ok", "server": "eirview", "version": app.version, "timestamp": _now_iso()}
+
+
+@app.get("/api/server-info")
+async def server_info() -> dict[str, Any]:
+    """Return local machine connection details for mobile setup."""
+
+    hostname = socket.gethostname()
+    local_ips = _detect_local_ips()
+    return {
+        "hostname": hostname,
+        "localhost_url": "http://127.0.0.1:8000",
+        "local_ips": local_ips,
+        "mobile_base_urls": [f"http://{ip}:8000" for ip in local_ips],
+    }
+
+
+@app.get("/api/mobile/profile/{user_id}")
+async def mobile_profile(user_id: str) -> Any:
+    """Return profile data in the iOS app contract shape."""
+
+    db = await get_db()
+    try:
+        profile = await get_profile_dict(user_id, db)
+        if profile is None:
+            return _mobile_error_response(404, "UNKNOWN_USER", "User ID not found. Create user first.", False)
+        return {
+            "user_id": user_id,
+            "profile_version": _mobile_profile_version(profile),
+            "manual_inputs": _mobile_manual_inputs(profile),
+            "healthkit_summary": _mobile_healthkit_summary(profile),
+            "source_status": _mobile_source_status(profile),
+            "updated_at": profile.get("updated_at"),
+        }
+    finally:
+        await db.close()
+
+
+@app.get("/api/mobile/dashboard/{user_id}")
+async def mobile_dashboard(user_id: str) -> Any:
+    """Return dashboard data in the iOS app contract shape."""
+
+    db = await get_db()
+    try:
+        profile = await get_profile_dict(user_id, db)
+        if profile is None:
+            return _mobile_error_response(404, "UNKNOWN_USER", "User ID not found. Create user first.", False)
+        risk_rows = await get_risk_projections(user_id)
+        if not risk_rows:
+            from backend.formulas import project_risk
+
+            risk_rows = project_risk(profile)
+            await save_risk_projections(user_id, risk_rows)
+        return _mobile_dashboard_payload(profile, risk_rows)
+    finally:
+        await db.close()
+
+
+@app.post("/api/mobile/sync")
+async def mobile_sync(request: Request) -> Any:
+    """Merge encrypted iOS snapshot data into the canonical user profile."""
+
+    try:
+        payload = await _decrypt_mobile_envelope(request)
+    except ValueError:
+        return _mobile_error_response(400, "INVALID_ENCRYPTION", "Failed to decrypt request body. Check encryption key.", False)
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        return _mobile_error_response(422, "INVALID_PAYLOAD", "Request body does not match expected schema.", False)
+
+    db = await get_db()
+    try:
+        user = await (await db.execute("SELECT * FROM users WHERE id=?", (user_id,))).fetchone()
+        if user is None:
+            return _mobile_error_response(404, "UNKNOWN_USER", "User ID not found. Create user first.", False)
+
+        updates = _mobile_profile_updates_from_sync(payload)
+        healthkit = payload.get("healthkit") or {}
+        if healthkit.get("height_cm") is not None:
+            await db.execute("UPDATE users SET height_cm=? WHERE id=?", (healthkit.get("height_cm"), user_id))
+
+        profile = await update_profile_fields(user_id, updates, db)
+
+        workouts = healthkit.get("workouts_7d") or []
+        if workouts:
+            await db.execute("DELETE FROM workouts WHERE user_id=? AND source='healthkit_mobile'", (user_id,))
+            for workout in workouts:
+                await log_workout(
+                    user_id,
+                    {
+                        "type": workout.get("type", "walking"),
+                        "duration_min": workout.get("duration_min"),
+                        "calories": workout.get("calories"),
+                        "date": workout.get("date"),
+                        "source": "healthkit_mobile",
+                    },
+                    db,
+                )
+
+        if healthkit:
+            await db.execute(
+                "INSERT OR REPLACE INTO data_sources (user_id, source, last_synced_at, refresh_interval_days) VALUES (?,?,CURRENT_TIMESTAMP,1)",
+                (user_id, "healthkit"),
+            )
+        if payload.get("manual_inputs"):
+            await db.execute(
+                "INSERT OR REPLACE INTO data_sources (user_id, source, last_synced_at, refresh_interval_days) VALUES (?,?,CURRENT_TIMESTAMP,7)",
+                (user_id, "manual_mobile"),
+            )
+        await db.commit()
+
+        risk_rows = await get_risk_projections(user_id)
+        if not risk_rows:
+            from backend.formulas import project_risk
+
+            risk_rows = project_risk(profile)
+            await save_risk_projections(user_id, risk_rows)
+
+        return {
+            "status": "ok",
+            "profile_version": _mobile_profile_version(profile),
+            "dashboard": _mobile_dashboard_payload(profile, risk_rows),
+            "profile_summary": _mobile_profile_summary(profile),
+            "missing_fields": _mobile_missing_fields(profile),
+            "last_processed_at": _now_iso(),
+        }
+    finally:
+        await db.close()
+
+
+@app.post("/api/mobile/simulate")
+async def mobile_simulate(request: Request) -> Any:
+    """Run encrypted mobile what-if simulation without persisting overrides."""
+
+    try:
+        payload = await _decrypt_mobile_envelope(request)
+    except ValueError:
+        return _mobile_error_response(400, "INVALID_ENCRYPTION", "Failed to decrypt request body. Check encryption key.", False)
+
+    user_id = payload.get("user_id")
+    overrides = payload.get("overrides")
+    if not user_id or not isinstance(overrides, dict):
+        return _mobile_error_response(422, "INVALID_PAYLOAD", "Request body does not match expected schema.", False)
+
+    db = await get_db()
+    try:
+        profile = await get_profile_dict(user_id, db)
+        if profile is None:
+            return _mobile_error_response(404, "UNKNOWN_USER", "User ID not found. Create user first.", False)
+
+        base_bio = calculate_bio_age(profile)
+        base_wellness = mental_wellness_score(profile)
+        simulated_profile = {
+            **profile,
+            "sleep_hours": overrides.get("sleep_hours", profile.get("sleep_hours")),
+            "exercise_min": overrides.get("exercise_min_daily", profile.get("exercise_min")),
+            "steps_avg_7d": overrides.get("steps_avg_7d", profile.get("steps_avg_7d")),
+            "stress_level": overrides.get("stress_level", profile.get("stress_level")),
+            "screen_time_hours": overrides.get("screen_time_hours", profile.get("screen_time_hours")),
+        }
+        simulated_bio = calculate_bio_age(simulated_profile)
+        simulated_wellness = mental_wellness_score(simulated_profile)
+        from backend.formulas import project_risk
+
+        simulated_risk_rows = project_risk(simulated_profile)
+        ten_year = next((row for row in simulated_risk_rows if int(row.get("year", 0)) == 10), simulated_risk_rows[-1] if simulated_risk_rows else {})
+        top_concern, top_strength = _top_wellness_labels(simulated_wellness)
+        return {
+            "biological_age": simulated_bio["overall"],
+            "subsystem_ages": {
+                "cardiovascular": simulated_bio["cardiovascular"],
+                "metabolic": simulated_bio["metabolic"],
+                "musculoskeletal": simulated_bio["musculoskeletal"],
+                "neurological": simulated_bio["neurological"],
+            },
+            "risk_summary": {
+                "diabetes_10yr": ten_year.get("diabetes_risk"),
+                "cvd_10yr": ten_year.get("cvd_risk"),
+                "metabolic_10yr": ten_year.get("metabolic_risk"),
+            },
+            "wellness_summary": {
+                "mental_wellness_score": simulated_wellness.get("score"),
+                "top_concern": top_concern,
+                "top_strength": top_strength,
+            },
+            "delta_summary": {
+                "biological_age_delta": round(simulated_bio["overall"] - base_bio["overall"], 2),
+                "cardiovascular_delta": round(simulated_bio["cardiovascular"] - base_bio["cardiovascular"], 2),
+                "metabolic_delta": round(simulated_bio["metabolic"] - base_bio["metabolic"], 2),
+                "musculoskeletal_delta": round(simulated_bio["musculoskeletal"] - base_bio["musculoskeletal"], 2),
+                "neurological_delta": round(simulated_bio["neurological"] - base_bio["neurological"], 2),
+                "mental_wellness_delta": round(simulated_wellness.get("score", 0) - base_wellness.get("score", 0), 2),
+            },
+        }
+    finally:
+        await db.close()
 
 
 @app.get("/api/profile/{user_id}")
@@ -175,6 +966,8 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
         workout_summary = await get_workout_summary(user_id, db)
         workout_target_data = await get_workout_targets(user_id, db)
         meals = await get_meals(user_id)
+        nutrition.update(_today_nutrition_progress(meals))
+        water_today_ml = await get_water_today(user_id)
         wellness = mental_wellness_score(profile)
         risk_rows = await get_risk_projections(user_id)
         if not risk_rows:
@@ -193,11 +986,8 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "flights": profile.get("flights_climbed"),
         }
         nudge = check_inactivity(profile, datetime.now().hour)
-        cross_domain = (
-            "Your sleep, stress, and activity pattern suggest your neurological age would improve fastest from more consistent sleep and a small daily walk."
-            if (profile.get("sleep_hours") or 0) < 7
-            else "Your current pattern is stable. The biggest upside now is consistency rather than drastic change."
-        )
+        cross_domain = _build_cross_domain_insight(profile, bio_age)
+        narrative = _build_dashboard_narrative(profile, bio_age, risk_rows, wellness)
         return {
             "profile": profile,
             "bio_age_overall": bio_age["overall"],
@@ -211,6 +1001,7 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "specialists": specialists,
             "gamification": gamification,
             "nutrition_targets": nutrition,
+            "water_today_ml": water_today_ml,
             "workout_summary": workout_summary,
             "workout_targets": workout_target_data,
             "recent_meals": meals,
@@ -218,7 +1009,7 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "wellness_breakdown": wellness["breakdown_list"],
             "risk_projections": risk_rows,
             "cross_domain_insight": cross_domain,
-            "narrative": f"Your biological age is {bio_age['overall']} versus chronological age {profile.get('age')}. Cardiovascular and neurological patterns are currently the main leverage points.",
+            "narrative": narrative,
             "activity_nudge": nudge,
         }
     finally:
@@ -241,12 +1032,15 @@ async def ingest_data(file: UploadFile = File(...), data_type: str = Form(...), 
             from backend.parsers import parse_blood_pdf
 
             extracted = await parse_blood_pdf(tmp_path, user_id, db)
+            await _touch_data_source(db, user_id, "blood_report", 90)
         elif data_type == "cultfit_image":
             from backend.parsers import parse_cultfit_image
 
             extracted = await parse_cultfit_image(tmp_path, user_id, db)
+            await _touch_data_source(db, user_id, "cultfit", 30)
         elif data_type == "apple_health_xml":
-            extracted = parse_apple_health_xml(tmp_path)
+            extracted = parse_apple_health_file(tmp_path)
+            await _touch_data_source(db, user_id, "apple_health", 2)
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported data_type: {data_type}")
         workouts = extracted.pop("workouts_7d", []) if isinstance(extracted, dict) else []
@@ -284,8 +1078,12 @@ async def face_age_endpoint(file: UploadFile = File(...), user_id: str = Form(..
         from backend.faceage import predict_face_age
 
         face_age = predict_face_age(image_bytes)
-    except Exception:
-        face_age = 0.0
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=f"Face age model is unavailable: {exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Face age prediction failed: {exc}") from exc
     db = await get_db()
     try:
         profile = await update_profile_fields(user_id, {"face_age": face_age}, db)
@@ -307,6 +1105,8 @@ async def receive_healthkit(request: Request) -> dict[str, Any]:
     db = await get_db()
     try:
         profile = await update_profile_fields(user_id, health_data, db)
+        await _touch_data_source(db, user_id, "healthkit", 2)
+        await db.commit()
         return {"success": True, "updated_fields": list(health_data.keys()), "profile": profile}
     finally:
         await db.close()
@@ -319,14 +1119,17 @@ async def upload_apple_health(file: UploadFile = File(...), user_id: str = Form(
     db = await get_db()
     tmp_path = ""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp:
+        suffix = os.path.splitext(file.filename or "")[1] or ".xml"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(await file.read())
             tmp_path = tmp.name
-        health_data = parse_apple_health_xml(tmp_path)
+        health_data = parse_apple_health_file(tmp_path)
         workouts = health_data.pop("workouts_7d", [])
         profile = await update_profile_fields(user_id, health_data, db)
+        await _touch_data_source(db, user_id, "apple_health", 2)
         for workout in workouts:
             await log_workout(user_id, workout, db)
+        await db.commit()
         return {"success": True, "metrics_updated": list(health_data.keys()), "workouts_found": len(workouts), "data": health_data, "profile": profile}
     finally:
         if tmp_path and os.path.exists(tmp_path):
@@ -400,8 +1203,8 @@ async def simulate_endpoint(request: Request) -> dict[str, Any]:
         if profile is None:
             raise HTTPException(status_code=404, detail=f"User {user_id} not found")
         simulation = simulate_habit_change(profile, changes)
-        narrative = await runner.run_agent(time_machine, user_id, {"changes": changes}, db)
-        return {"simulation": simulation, "narrative": narrative["result"], "traces": narrative["traces"]}
+        narrative = _build_simulation_narrative(profile, changes, simulation)
+        return {"simulation": simulation, "narrative": narrative, "traces": []}
     finally:
         await db.close()
 
@@ -413,6 +1216,9 @@ async def chat_future(request: Request) -> StreamingResponse:
     data = await request.json()
     user_id = data.get("user_id", "zahoor")
     message = str(data.get("message", ""))[-1200:]
+    if not _is_future_question_in_scope(message):
+        return StreamingResponse(_stream_static_sse(_future_out_of_scope_message()), media_type="text/event-stream")
+    contextualized_message = _merge_chat_context(message, data.get("context", ""))
     history = _trim_chat_history(data.get("history", []))
     db = await get_db()
 
@@ -422,9 +1228,9 @@ async def chat_future(request: Request) -> StreamingResponse:
             bio_age = calculate_bio_age(profile or {})
             age = (profile or {}).get("age", 19)
             name = (profile or {}).get("name", "you")
-            prompt = f"You are {name} at age {age + 15}, speaking to your younger self. Their bio age is {bio_age['overall']}."
+            prompt = _future_system_prompt(name, age, bio_age["overall"])
             messages = history
-            messages.append({"role": "user", "content": message})
+            messages.append({"role": "user", "content": contextualized_message})
             with ai_router.stream_claude(system=prompt, messages=messages, max_tokens=ai_router.chat_max_tokens) as stream:
                 for event in stream:
                     if getattr(event, "type", "") == "content_block_delta" and hasattr(event.delta, "text"):
@@ -441,12 +1247,17 @@ async def chat_mental(request: Request) -> StreamingResponse:
     """Mental-health SSE chat endpoint."""
 
     data = await request.json()
+    message = str(data.get("message", ""))[-1200:]
+    if _is_mental_crisis_message(message):
+        return StreamingResponse(_stream_static_sse(_mental_crisis_message()), media_type="text/event-stream")
+    if not _is_mental_question_in_scope(message):
+        return StreamingResponse(_stream_static_sse(_mental_out_of_scope_message()), media_type="text/event-stream")
     db = await get_db()
     return StreamingResponse(
         runner.stream_agent(
             mental_health,
             data.get("user_id", "zahoor"),
-            {"message": str(data.get("message", ""))[-1200:], "history": _trim_chat_history(data.get("history", []))},
+            {"message": message, "history": _trim_chat_history(data.get("history", []))},
             db,
             close_db=True,
         ),
@@ -460,11 +1271,10 @@ async def chat_coach(request: Request) -> StreamingResponse:
 
     data = await request.json()
     message = str(data.get("message", ""))[-1200:]
+    contextualized_message = _merge_chat_context(message, data.get("context", ""))
     if not _is_coach_question_in_scope(message):
         return StreamingResponse(
-            _stream_static_sse(
-                "I’m the EirView health coach. I can help with your metrics, habits, nutrition, sleep, activity, recovery, reminders, and next-step planning."
-            ),
+            _stream_static_sse(_coach_out_of_scope_message()),
             media_type="text/event-stream",
         )
     db = await get_db()
@@ -472,7 +1282,7 @@ async def chat_coach(request: Request) -> StreamingResponse:
         runner.stream_agent(
             coach,
             data.get("user_id", "zahoor"),
-            {"message": message, "history": _trim_chat_history(data.get("history", []))},
+            {"message": contextualized_message, "history": _trim_chat_history(data.get("history", []))},
             db,
             close_db=True,
         ),
@@ -489,17 +1299,38 @@ async def get_transparency(user_id: str) -> dict[str, Any]:
         cursor = await db.execute("SELECT * FROM agent_logs WHERE user_id=? ORDER BY timestamp DESC LIMIT 100", (user_id,))
         rows = await cursor.fetchall()
         logs = [dict(row) for row in rows]
-        model_stats: dict[str, Any] = {}
+        model_stats: dict[str, Any] = {
+            "claude": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
+            "gemini": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
+            "deterministic": {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0},
+        }
+        exact_model_stats: dict[str, Any] = {}
         for entry in ai_router.call_log:
-            model = entry["model"]
-            bucket = model_stats.setdefault(model, {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0})
+            model = str(entry.get("model") or "deterministic")
+            model_key = model.lower()
+            if "claude" in model_key:
+                provider = "claude"
+            elif "gemini" in model_key:
+                provider = "gemini"
+            else:
+                provider = "deterministic"
+            bucket = model_stats.setdefault(provider, {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0})
             bucket["calls"] += 1
             bucket["success"] += int(bool(entry["success"]))
             bucket["total_latency_ms"] += entry["latency_ms"]
-        for model, stats in model_stats.items():
+            exact_bucket = exact_model_stats.setdefault(model, {"calls": 0, "success": 0, "total_latency_ms": 0, "estimated_cost": 0})
+            exact_bucket["calls"] += 1
+            exact_bucket["success"] += int(bool(entry["success"]))
+            exact_bucket["total_latency_ms"] += entry["latency_ms"]
+        for stats in list(model_stats.values()) + list(exact_model_stats.values()):
             stats["avg_latency_ms"] = round(stats["total_latency_ms"] / max(stats["calls"], 1))
             stats["success_rate"] = round(stats["success"] / max(stats["calls"], 1) * 100, 1)
-        return {"agent_logs": logs, "model_stats": model_stats, "recent_calls": ai_router.call_log[-50:]}
+        return {
+            "agent_logs": logs,
+            "model_stats": model_stats,
+            "exact_model_stats": exact_model_stats,
+            "recent_calls": ai_router.call_log[-50:],
+        }
     finally:
         await db.close()
 
@@ -584,6 +1415,17 @@ async def get_reminders_endpoint(user_id: str) -> list[dict[str, Any]]:
     db = await get_db()
     try:
         return await check_reminders(user_id, db)
+    finally:
+        await db.close()
+
+
+@app.get("/api/data-freshness/{user_id}")
+async def get_data_freshness_endpoint(user_id: str) -> list[dict[str, Any]]:
+    """Return exact upload history and recommended refresh timing."""
+
+    db = await get_db()
+    try:
+        return await get_data_freshness(user_id, db)
     finally:
         await db.close()
 
@@ -679,14 +1521,51 @@ async def workout_targets_endpoint(user_id: str) -> dict[str, Any]:
 async def spotify_callback(code: str, state: str = "") -> dict[str, Any]:
     """Handle Spotify OAuth callback and sync data."""
 
-    from backend.spotify import exchange_spotify_code, sync_spotify
+    from backend.spotify import exchange_spotify_code, resolve_spotify_oauth_state, sync_spotify
 
     db = await get_db()
     try:
-        user_id = state or "zahoor"
+        try:
+            user_id = resolve_spotify_oauth_state(state)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         access_token = exchange_spotify_code(code)
         result = await sync_spotify(user_id, access_token, db)
         return {"success": True, "user_id": user_id, "spotify_data": result}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Spotify connection failed: {exc}") from exc
+    finally:
+        await db.close()
+
+
+@app.get("/api/spotify/status/{user_id}")
+async def spotify_status(user_id: str) -> dict[str, Any]:
+    """Return Spotify connection status for a user."""
+
+    db = await get_db()
+    try:
+        token_row = await (
+            await db.execute("SELECT updated_at FROM spotify_tokens WHERE user_id=?", (user_id,))
+        ).fetchone()
+        history_row = await (
+            await db.execute(
+                """
+                SELECT timestamp, avg_valence, avg_energy, avg_danceability, track_count
+                FROM spotify_history
+                WHERE user_id=?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+        ).fetchone()
+        return {
+            "connected": token_row is not None,
+            "connected_at": token_row["updated_at"] if token_row else None,
+            "latest_sync": dict(history_row) if history_row else None,
+        }
     finally:
         await db.close()
 
@@ -695,13 +1574,13 @@ async def spotify_callback(code: str, state: str = "") -> dict[str, Any]:
 async def spotify_sync(user_id: str) -> dict[str, Any]:
     """Trigger Spotify sync or return auth URL."""
 
-    from backend.spotify import sp_oauth, sync_spotify
+    from backend.spotify import generate_spotify_oauth_state, sp_oauth, sync_spotify
 
     db = await get_db()
     try:
         row = await (await db.execute("SELECT access_token FROM spotify_tokens WHERE user_id=?", (user_id,))).fetchone()
         if row is None:
-            return {"needs_auth": True, "auth_url": sp_oauth.get_authorize_url(state=user_id)}
+            return {"needs_auth": True, "auth_url": sp_oauth.get_authorize_url(state=generate_spotify_oauth_state(user_id))}
         return {"success": True, "data": await sync_spotify(user_id, row["access_token"], db)}
     finally:
         await db.close()
@@ -727,3 +1606,59 @@ async def receive_posture(request: Request) -> dict[str, Any]:
         return {"success": True, "score_pct": data.get("score_pct", 100), "avg_recent_5": round(average_recent, 1), "nudge": average_recent < 50, "profile": profile}
     finally:
         await db.close()
+
+
+@app.post("/api/posture/analyze")
+async def analyze_posture_endpoint(user_id: str = Form(...), file: UploadFile = File(...)) -> dict[str, Any]:
+    """Analyze a webcam frame for posture, persist it, and return recent trend data."""
+
+    try:
+        image_bytes = await file.read()
+        reading = analyze_posture_image(image_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    saved = await log_posture(user_id, reading)
+    history = await get_posture_history(user_id, limit=12)
+    history = list(reversed(history))
+    average_score = round(sum(float(row.get("score_pct") or 0) for row in history) / max(len(history), 1), 1)
+    latest = history[-1] if history else saved
+    return {
+        "success": True,
+        "analysis": saved,
+        "summary": {
+            "latest_score_pct": latest.get("score_pct"),
+            "latest_angle": latest.get("avg_angle"),
+            "is_slouching": latest.get("is_slouching"),
+            "average_score_pct": average_score,
+            "samples": len(history),
+        },
+        "history": history,
+    }
+
+
+@app.get("/api/posture/{user_id}")
+async def get_posture_endpoint(user_id: str) -> dict[str, Any]:
+    """Return recent posture history and summary for a user."""
+
+    history = await get_posture_history(user_id, limit=20)
+    ordered = list(reversed(history))
+    if not ordered:
+        return {
+            "summary": {"latest_score_pct": None, "latest_angle": None, "is_slouching": None, "average_score_pct": None, "samples": 0},
+            "history": [],
+        }
+    average_score = round(sum(float(row.get("score_pct") or 0) for row in ordered) / len(ordered), 1)
+    latest = ordered[-1]
+    return {
+        "summary": {
+            "latest_score_pct": latest.get("score_pct"),
+            "latest_angle": latest.get("avg_angle"),
+            "is_slouching": latest.get("is_slouching"),
+            "average_score_pct": average_score,
+            "samples": len(ordered),
+        },
+        "history": ordered,
+    }

@@ -1,22 +1,48 @@
-import { Camera, FileText, Image, Smartphone } from 'lucide-react';
-import { useState } from 'react';
+import { Camera, Clock3, FileText, Image, Smartphone } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import FileUpload from '../components/FileUpload';
 import ManualEntryForm from '../components/ManualEntryForm';
 import useStore from '../store';
-import { uploadAppleHealth, uploadFaceAge, uploadFile } from '../api';
+import { getDashboard, getDataFreshness, uploadAppleHealth, uploadFaceAge, uploadFile } from '../api';
 
 const sources = [
   { key: 'blood_pdf', label: 'Blood Report', icon: FileText, accept: '.pdf' },
   { key: 'cultfit_image', label: 'Cult.fit Report', icon: Image, accept: '.png,.jpg,.jpeg' },
-  { key: 'apple_health_xml', label: 'Apple Health', icon: Smartphone, accept: '.xml' },
+  { key: 'apple_health_xml', label: 'Apple Health', icon: Smartphone, accept: '.xml,.zip' },
   { key: 'face_age', label: 'Face Age Selfie', icon: Camera, accept: '.jpg,.jpeg,.png' }
 ];
 
 export default function DataIngest() {
-  const { selectedUserId } = useStore();
+  const { selectedUserId, showToast, setDashboard, setProfile } = useStore();
   const [selected, setSelected] = useState(sources[0]);
   const [result, setResult] = useState(null);
+  const [freshness, setFreshness] = useState([]);
+  const [formRefreshKey, setFormRefreshKey] = useState(0);
   const extracted = result?.extracted;
+  const mobileSyncRows = freshness.filter((item) => ['healthkit', 'apple_health', 'manual_mobile'].includes(item.source));
+
+  const formatDateTime = (value) => {
+    if (!value) return 'Not uploaded yet';
+    const normalizedValue = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? value.replace(' ', 'T') + 'Z'
+      : value;
+    const parsed = new Date(normalizedValue);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  };
+
+  const loadFreshness = async () => {
+    try {
+      const response = await getDataFreshness(selectedUserId);
+      setFreshness(response.data || []);
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  };
+
+  useEffect(() => {
+    loadFreshness();
+  }, [selectedUserId]);
 
   const endpoint = async (file) => {
     const formData = new FormData();
@@ -26,6 +52,21 @@ export default function DataIngest() {
     if (selected.key === 'apple_health_xml') return uploadAppleHealth(formData);
     formData.append('data_type', selected.key);
     return uploadFile(formData);
+  };
+
+  const handleUploadResult = async (payload) => {
+    setResult(payload);
+    if (payload?.profile) {
+      setProfile(payload.profile);
+    }
+    try {
+      const dashboardResponse = await getDashboard(selectedUserId);
+      setDashboard(dashboardResponse.data);
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+    setFormRefreshKey((current) => current + 1);
+    await loadFreshness();
   };
 
   return (
@@ -41,7 +82,93 @@ export default function DataIngest() {
           );
         })}
       </div>
-      <FileUpload accept={selected.accept} label={selected.label} endpoint={endpoint} onUpload={setResult} />
+      <FileUpload accept={selected.accept} label={selected.label} endpoint={endpoint} onUpload={handleUploadResult} />
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-xl bg-slate-100 flex items-center justify-center">
+            <Clock3 size={18} className="text-slate-600" />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Upload History And Refresh Windows</div>
+            <div className="text-sm text-slate-500">
+              See exactly what you uploaded, when it was last recorded, how long it has been, and when EirView recommends refreshing it.
+            </div>
+          </div>
+        </div>
+        {!!mobileSyncRows.length && (
+          <div className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <div className="flex items-center gap-2">
+              <Smartphone size={16} className="text-blue-700" />
+              <div className="text-sm font-semibold text-blue-900">iPhone / Apple Sync Activity</div>
+            </div>
+            <div className="text-sm text-blue-800 mt-1">
+              If the iPhone app or Apple Health import synced successfully, it will appear here immediately.
+            </div>
+            <div className="grid gap-3 md:grid-cols-3 mt-4">
+              {mobileSyncRows.map((item) => (
+                <div key={`mobile-${item.source}`} className="rounded-lg border border-blue-200 bg-white px-3 py-3">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">{item.label}</div>
+                  <div className="text-sm font-medium text-slate-900 mt-1">{formatDateTime(item.last_synced)}</div>
+                  <div className="text-xs text-slate-500 mt-2">
+                    {item.days_since_upload == null ? 'No sync yet' : `${item.days_since_upload} days since last sync`}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">Refresh window: every {item.recommended_interval_days} days</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="mt-5 grid gap-3">
+          {freshness.map((item) => {
+            const urgencyClass = item.urgency === 'high'
+              ? 'border-red-200 bg-red-50'
+              : item.urgency === 'medium'
+                ? 'border-amber-200 bg-amber-50'
+                : 'border-slate-200 bg-slate-50';
+            return (
+              <div key={`${item.type}-${item.source}`} className={`rounded-xl border p-4 ${urgencyClass}`}>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                    <div className="text-sm text-slate-600 mt-1">{item.message}</div>
+                  </div>
+                  <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                    {String(item.status || item.type).replaceAll('_', ' ')}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3 mt-4">
+                  <div className="rounded-lg bg-white/80 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">Last Recorded</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">{formatDateTime(item.last_synced)}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/80 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">Recommended Refresh</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">Every {item.recommended_interval_days} days</div>
+                  </div>
+                  <div className="rounded-lg bg-white/80 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">Days Since</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">
+                      {item.days_since_upload == null ? 'No upload yet' : `${item.days_since_upload} days`}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white/80 px-3 py-2">
+                    <div className="text-[11px] uppercase tracking-wide text-slate-500">Next Due</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">
+                      {item.next_due_at ? formatDateTime(item.next_due_at) : 'Upload needed'}
+                    </div>
+                    {item.days_overdue > 0 && (
+                      <div className="text-xs text-red-600 mt-1">Overdue by {item.days_overdue} days</div>
+                    )}
+                    {!item.days_overdue && item.days_until_due != null && (
+                      <div className="text-xs text-slate-500 mt-1">Due in about {item.days_until_due} days</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
       {selected.key === 'blood_pdf' && extracted?.source_summary && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
           <div className="flex flex-wrap items-center gap-3">
@@ -49,6 +176,8 @@ export default function DataIngest() {
             <span className="text-xs rounded-full bg-emerald-50 text-emerald-700 px-2 py-1">{extracted.source_summary.tests_found} tests found</span>
             <span className="text-xs rounded-full bg-blue-50 text-blue-700 px-2 py-1">{extracted.source_summary.recognized_count} recognized</span>
             <span className="text-xs rounded-full bg-amber-50 text-amber-700 px-2 py-1">{extracted.source_summary.unmapped_count} unmapped</span>
+            {!!extracted.source_summary.ambiguous_count && <span className="text-xs rounded-full bg-orange-50 text-orange-700 px-2 py-1">{extracted.source_summary.ambiguous_count} review needed</span>}
+            {!!extracted.source_summary.invalid_count && <span className="text-xs rounded-full bg-red-50 text-red-700 px-2 py-1">{extracted.source_summary.invalid_count} rejected</span>}
           </div>
           {!!Object.keys(extracted.recognized_fields || {}).length && (
             <div className="mt-4">
@@ -71,6 +200,36 @@ export default function DataIngest() {
               </div>
             </div>
           )}
+          {!!extracted.ambiguous_tests?.length && (
+            <div className="mt-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Metrics Not Auto-Applied Because Multiple Conflicting Values Were Detected</div>
+              <div className="mt-2 space-y-2">
+                {extracted.ambiguous_tests.map((item) => (
+                  <div key={item.metric} className="rounded-lg bg-orange-50 border border-orange-200 px-3 py-2">
+                    <div className="text-sm font-medium text-orange-900">{item.label}</div>
+                    <div className="text-xs text-orange-800 mt-1">
+                      Candidates: {item.candidates.map((candidate) => candidate.value).join(', ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {!!extracted.invalid_tests?.length && (
+            <div className="mt-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rejected Values That Were Out Of Plausible Range</div>
+              <div className="mt-2 space-y-2">
+                {extracted.invalid_tests.map((item, index) => (
+                  <div key={`${item.metric || item.name}-${index}`} className="rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+                    <div className="text-sm font-medium text-red-900">{item.name}</div>
+                    <div className="text-xs text-red-800 mt-1">
+                      Value {item.value} was ignored because it looked invalid for {item.metric?.replaceAll('_', ' ') || item.name}.
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {!!extracted.missing_common_tests?.length && (
             <div className="mt-4">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Common Tests Not Present In This Report</div>
@@ -81,13 +240,32 @@ export default function DataIngest() {
           )}
         </div>
       )}
+      {selected.key === 'cultfit_image' && result && (
+        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
+          <div className="text-sm font-semibold text-slate-800">Cult.fit Extraction</div>
+          {!!Object.keys(result.extracted || {}).length ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+              {Object.entries(result.extracted || {}).map(([key, value]) => (
+                <div key={key} className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
+                  <div className="text-xs text-slate-500">{key.replaceAll('_', ' ')}</div>
+                  <div className="text-sm font-medium text-slate-800 mt-1">{value ?? 'Not extracted'}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-amber-700 mt-3">
+              The report upload completed, but no body-composition values were extracted from this image.
+            </div>
+          )}
+        </div>
+      )}
       {result && (
         <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mt-6">
           <pre className="text-xs text-slate-700 whitespace-pre-wrap">{JSON.stringify(result, null, 2)}</pre>
         </div>
       )}
       <div className="border-t border-slate-200 my-8" />
-      <ManualEntryForm />
+      <ManualEntryForm refreshKey={formRefreshKey} />
     </div>
   );
 }

@@ -376,14 +376,21 @@ def nutrition_targets(profile: dict[str, Any]) -> dict[str, Any]:
 def simulate_habit_change(profile: dict[str, Any], changes: dict[str, Any]) -> dict[str, Any]:
     """Apply hypothetical lifestyle changes and recalculate bio age."""
 
-    modified = {**profile, **changes}
-    if "exercise" in changes and "exercise_hours_week" not in modified:
-        modified["exercise_hours_week"] = changes["exercise"]
+    modified = {**profile}
+    if "sleep" in changes:
+        modified["sleep_hours"] = float(changes["sleep"])
+    if "exercise" in changes:
+        modified["exercise_hours_week"] = float(changes["exercise"])
         modified["exercise_min"] = int(float(changes["exercise"]) * 60 / 7)
-    if "screen_time" in changes and "screen_time_hours" not in modified:
-        modified["screen_time_hours"] = changes["screen_time"]
-    if "diet" in changes and "diet_quality" not in modified:
+    if "screen_time" in changes:
+        modified["screen_time_hours"] = float(changes["screen_time"])
+    if "stress" in changes:
+        modified["stress_level"] = float(changes["stress"])
+    if "exam_stress" in changes:
+        modified["exam_stress"] = float(changes["exam_stress"])
+    if "diet" in changes:
         modified["diet_quality"] = {1: "poor", 2: "average", 3: "good", 4: "excellent"}.get(int(changes["diet"]), "average")
+    modified.update({key: value for key, value in changes.items() if key not in {"sleep", "exercise", "screen_time", "stress", "exam_stress", "diet"}})
     current = _calculate_bio_age_base(profile)
     projected = _calculate_bio_age_base(modified)
     return {

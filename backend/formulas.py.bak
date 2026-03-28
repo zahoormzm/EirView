@@ -29,6 +29,13 @@ def _num(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _positive_num(value: Any, default: float) -> float:
+    """Return a positive numeric value or a safe default."""
+
+    numeric = _num(value, default)
+    return numeric if numeric > 0 else float(default)
+
+
 def cardiovascular_delta(profile: dict[str, Any]) -> float:
     """Calculate cardiovascular age delta from profile data."""
 
@@ -333,16 +340,16 @@ def mental_wellness_score(profile: dict[str, Any]) -> dict[str, Any]:
 def nutrition_targets(profile: dict[str, Any]) -> dict[str, Any]:
     """Calculate personalized daily nutrition targets based on profile data."""
 
-    weight = _num(profile.get("weight_kg"), 70)
-    bmr = _num(profile.get("bmr"), round(weight * 30))
+    weight = _positive_num(profile.get("weight_kg"), 70)
+    bmr = _positive_num(profile.get("bmr"), round(weight * 30))
     calories = round(bmr * 1.4) if bmr else round(weight * 30)
-    muscle_ratio = (_num(profile.get("muscle_mass_kg")) / weight) if weight else 0
+    muscle_ratio = max(0.0, _num(profile.get("muscle_mass_kg")) / weight) if weight else 0
     protein_mult = 1.5 if muscle_ratio < 0.35 else 1.2
     protein_g = round(weight * protein_mult)
     ldl = _num(profile.get("ldl"), 100)
     sat_fat_g = 10 if ldl > 160 else 11 if ldl > 130 else 13 if ldl > 100 else 16
     fiber_g = 30
-    temp = _num(profile.get("temperature_c"), 28)
+    temp = max(0.0, _num(profile.get("temperature_c"), 28))
     water_ml = round(weight * 35 + max(0, temp - 25) * 100)
     vitd_ug = 50 if _num(profile.get("vitamin_d"), 30) < 20 else 15
     b12_ug = 100 if _num(profile.get("b12"), 300) < 300 else 2.4

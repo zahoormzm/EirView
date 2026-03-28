@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getWorkouts, getWorkoutSummary, getWorkoutTargets, logWorkout } from '../api';
 import ActivityNudge from '../components/ActivityNudge';
+import ChatInterface from '../components/ChatInterface';
 import StepProgressRing from '../components/StepProgressRing';
 import WorkoutLog from '../components/WorkoutLog';
 import WorkoutSummary from '../components/WorkoutSummary';
@@ -23,6 +24,16 @@ export default function ActivityPage() {
     { label: 'Other', value: 'other' }
   ];
   const [form, setForm] = useState({ type: 'running', duration_min: 30, calories: '' });
+  const coachContext = [
+    `User: ${selectedUserId}`,
+    `Current steps today: ${dashboard?.metrics?.steps ?? 'unknown'}`,
+    `Current step goal: ${dashboard?.step_goal ?? 'unknown'}`,
+    `Workout sessions this week: ${summary?.total_sessions ?? 'unknown'}`,
+    `Workout minutes this week: ${summary?.total_minutes ?? 'unknown'}`,
+    `Workout calories this week: ${summary?.total_calories ?? 'unknown'}`,
+    `Recommended sessions: ${(targets?.recommended_sessions || []).map((session) => `${session.type} ${session.frequency}`).join('; ') || 'none available'}`,
+    `Recent workouts: ${workouts.slice(0, 3).map((workout) => `${workout.type} ${workout.duration_min} min on ${workout.date}`).join('; ') || 'none logged'}`
+  ].join('\n');
 
   const load = async () => {
     try {
@@ -58,6 +69,19 @@ export default function ActivityPage() {
         <div className="lg:col-span-2"><WorkoutSummary summary={summary} /></div>
       </div>
       <WorkoutTargets data={targets} />
+      <ChatInterface
+        chatType="coach"
+        userId={selectedUserId}
+        title="Workout Coach"
+        placeholder="Ask what workouts you should do next"
+        helperText="The coach uses your current workout targets, recent sessions, and activity progress from this page."
+        suggestedPrompts={[
+          'What workout should I do tomorrow based on this week?',
+          'Am I doing enough cardio and strength work?',
+          'How should I adjust my routine to improve bio age?'
+        ]}
+        context={coachContext}
+      />
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <select value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">

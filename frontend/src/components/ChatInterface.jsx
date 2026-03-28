@@ -3,12 +3,26 @@ import { useEffect, useRef, useState } from 'react';
 import { streamChat } from '../api';
 import useStore from '../store';
 
-export default function ChatInterface({ chatType, userId, title, placeholder, tall = false }) {
+export default function ChatInterface({
+  chatType,
+  userId,
+  title,
+  placeholder,
+  tall = false,
+  helperText = '',
+  suggestedPrompts = [],
+  context = ''
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const scrollRef = useRef(null);
   const { showToast } = useStore();
+
+  useEffect(() => {
+    setMessages([]);
+    setInput('');
+  }, [chatType, userId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -30,7 +44,8 @@ export default function ChatInterface({ chatType, userId, title, placeholder, ta
         messages,
         (chunk) => setMessages((previous) => previous.map((item, index) => index === previous.length - 1 ? { ...item, content: item.content + chunk } : item)),
         (tool) => setMessages((previous) => [...previous, { role: 'tool', content: `${tool.name}: ${JSON.stringify(tool.result)}` }]),
-        () => setStreaming(false)
+        () => setStreaming(false),
+        context
       );
     } catch (error) {
       setStreaming(false);
@@ -41,6 +56,25 @@ export default function ChatInterface({ chatType, userId, title, placeholder, ta
   return (
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col ${tall ? 'h-[600px]' : 'h-[500px]'}`}>
       <div className="px-4 py-3 border-b border-slate-200 font-semibold text-slate-900">{title}</div>
+      {(helperText || suggestedPrompts.length > 0) && (
+        <div className="px-4 py-3 border-b border-slate-100 bg-slate-50">
+          {helperText && <div className="text-sm text-slate-600">{helperText}</div>}
+          {suggestedPrompts.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {suggestedPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => setInput(prompt)}
+                  className="rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs text-emerald-700 hover:bg-emerald-50 transition"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
         {!messages.length && <div className="text-sm text-slate-500">Start the conversation.</div>}
         {messages.map((message, index) => (

@@ -12,6 +12,7 @@ const titles = {
   '/nutrition': 'Nutrition',
   '/future': 'Future Self',
   '/activity': 'Activity',
+  '/posture': 'Posture',
   '/gamification': 'Gamification',
   '/transparency': 'Transparency',
   '/family': 'Family',
@@ -20,13 +21,16 @@ const titles = {
 
 export default function TopBar() {
   const location = useLocation();
-  const { alerts } = useStore();
+  const { alerts, profile, selectedUserId } = useStore();
 
   return (
     <header className="bg-white border-b border-slate-200 px-6 py-3 flex justify-between items-center sticky top-0 z-20">
       <div>
         <h1 className="text-lg font-semibold text-slate-900">{titles[location.pathname] || 'EirView'}</h1>
-        <p className="text-sm text-slate-500">EirView. Your progress, in full focus.</p>
+        <p className="text-sm text-slate-500">
+          EirView. Your progress, in full focus.
+          <span className="ml-2 text-slate-400">Viewing {profile?.name || selectedUserId}</span>
+        </p>
       </div>
       <div className="flex items-center gap-4">
         <UserSelector />

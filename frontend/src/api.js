@@ -35,6 +35,7 @@ export const createFamily = (name, userId) => API.post('/api/family', { name, cr
 export const joinFamily = (joinCode, userId, relationship, privacy) => API.post('/api/family/join', { join_code: joinCode, user_id: userId, relationship, privacy_level: privacy });
 export const getFamily = (familyId) => API.get(`/api/family/${familyId}`);
 export const getReminders = (userId) => API.get(`/api/reminders/${userId}`);
+export const getDataFreshness = (userId) => API.get(`/api/data-freshness/${userId}`);
 export const getAlerts = (userId) => API.get(`/api/alerts/${userId}`);
 export const notifyDoctor = (userId, alertId) => API.post(`/api/alerts/${userId}/notify-doctor`, { alert_id: alertId });
 export const getSpecialists = (userId) => API.get(`/api/specialists/${userId}`);
@@ -42,14 +43,21 @@ export const getWorkouts = (userId) => API.get(`/api/workouts/${userId}`);
 export const logWorkout = (userId, data) => API.post(`/api/workouts/${userId}`, data);
 export const getWorkoutSummary = (userId) => API.get(`/api/workouts/${userId}/summary`);
 export const getWorkoutTargets = (userId) => API.get(`/api/workouts/${userId}/targets`);
+export const analyzePosture = (formData) => API.post('/api/posture/analyze', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
+export const getPostureHistory = (userId) => API.get(`/api/posture/${userId}`);
+export const savePostureReading = (userId, reading) => API.post('/api/posture', { user_id: userId, ...reading });
 export const getTransparency = (userId) => API.get(`/api/transparency/${userId}`);
 export const getSpotifySync = (userId) => API.get(`/api/spotify/sync/${userId}`);
+export const getSpotifyStatus = (userId) => API.get(`/api/spotify/status/${userId}`);
+export const getMobileHealth = () => API.get('/api/mobile/health');
+export const getMobileProfile = (userId) => API.get(`/api/mobile/profile/${userId}`);
+export const getServerInfo = () => API.get('/api/server-info');
 
-export const streamChat = async (endpoint, userId, message, history, onText, onTool, onDone) => {
+export const streamChat = async (endpoint, userId, message, history, onText, onTool, onDone, context = '') => {
   const response = await fetch(apiUrl(`/api/chat/${endpoint}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, message, history })
+    body: JSON.stringify({ user_id: userId, message, history, context })
   });
   if (!response.ok) {
     let detail = 'Streaming request failed';

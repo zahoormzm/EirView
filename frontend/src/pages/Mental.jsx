@@ -23,7 +23,18 @@ export default function Mental() {
         )}
       </div>
       <div className="lg:col-span-2">
-        <ChatInterface chatType="mental" userId={selectedUserId} title="Mental Health Chat" placeholder="How are you feeling today?" />
+        <ChatInterface
+          chatType="mental"
+          userId={selectedUserId}
+          title="Mental Health Chat"
+          placeholder="How are you feeling today?"
+          helperText="Use this chat for stress, burnout, mood, routines, sleep-linked wellbeing, and emotional reflection. Unrelated questions are intentionally blocked."
+          suggestedPrompts={[
+            'I feel overwhelmed and burnt out. What should I do tonight?',
+            'How is my sleep affecting my mental wellness?',
+            'What routine would help with exam stress?'
+          ]}
+        />
       </div>
     </div>
   );

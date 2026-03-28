@@ -59,6 +59,27 @@ def angle_to_score(angle: float) -> float:
     return 20
 
 
+def analyze_posture_image(image_bytes: bytes) -> dict[str, float | bool]:
+    """Analyze one image frame and return a posture reading."""
+
+    _ensure_mediapipe()
+    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("Could not decode posture image")
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+        results = pose.process(rgb)
+    if not results.pose_landmarks:
+        raise ValueError("No body pose detected. Make sure your head, shoulders, and torso are visible.")
+    angle = calculate_posture_angle(results.pose_landmarks.landmark)
+    score = angle_to_score(angle)
+    return {
+        "score_pct": round(float(score), 1),
+        "avg_angle": round(float(angle), 1),
+        "is_slouching": bool(score < 60),
+    }
+
+
 def main() -> int:
     """Run the posture detection loop and post readings to the backend."""
 

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { createUser, getSpotifySync, getUsers, updateProfile } from '../api';
+import { useEffect, useMemo, useState } from 'react';
+import { createUser, getDataFreshness, getMobileHealth, getMobileProfile, getServerInfo, getSpotifyStatus, getSpotifySync, getUsers, updateProfile } from '../api';
 import useStore from '../store';
 
 const demoUserNotes = {
@@ -11,6 +11,11 @@ const demoUserNotes = {
 export default function Settings() {
   const { selectedUserId, profile, users, setProfile, setSelectedUser, setUsers, showToast } = useStore();
   const [server, setServer] = useState({ ip: 'localhost', port: '8000' });
+  const [serverInfo, setServerInfo] = useState({ hostname: null, localhost_url: null, local_ips: [], mobile_base_urls: [] });
+  const [spotifyStatus, setSpotifyStatus] = useState({ connected: false, connected_at: null, latest_sync: null });
+  const [mobileHealth, setMobileHealth] = useState({ status: 'unknown', server: null, version: null, timestamp: null });
+  const [mobileProfile, setMobileProfile] = useState(null);
+  const [mobileFreshness, setMobileFreshness] = useState([]);
   const [contacts, setContacts] = useState({
     doctor_name: profile?.doctor_name || '',
     doctor_email: profile?.doctor_email || '',
@@ -20,6 +25,25 @@ export default function Settings() {
     privacy_level: 'summary'
   });
   const [newUser, setNewUser] = useState({ id: '', name: '', age: '', sex: 'female', height_cm: '' });
+  const selectedUser = useMemo(
+    () => users.find((user) => user.id === selectedUserId) || { id: selectedUserId, name: profile?.name || selectedUserId },
+    [users, selectedUserId, profile]
+  );
+  const mobileBaseUrl = `http://${server.ip || 'localhost'}:${server.port || '8000'}`;
+  const mobileDataRows = useMemo(
+    () => mobileFreshness.filter((item) => ['healthkit', 'apple_health', 'manual_mobile'].includes(item.source)),
+    [mobileFreshness]
+  );
+
+  const formatDateTime = (value) => {
+    if (!value) return 'Not synced yet';
+    const normalizedValue = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? value.replace(' ', 'T') + 'Z'
+      : value;
+    const parsed = new Date(normalizedValue);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return parsed.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  };
 
   useEffect(() => {
     setContacts((previous) => ({
@@ -31,6 +55,43 @@ export default function Settings() {
       emergency_contact_phone: profile?.emergency_contact_phone || ''
     }));
   }, [profile]);
+
+  useEffect(() => {
+    if (!selectedUserId) return;
+    (async () => {
+      try {
+        const [spotifyResponse, mobileProfileResponse, mobileFreshnessResponse] = await Promise.all([
+          getSpotifyStatus(selectedUserId),
+          getMobileProfile(selectedUserId),
+          getDataFreshness(selectedUserId),
+        ]);
+        setSpotifyStatus(spotifyResponse.data);
+        setMobileProfile(mobileProfileResponse.data);
+        setMobileFreshness(mobileFreshnessResponse.data || []);
+      } catch {
+        setSpotifyStatus({ connected: false, connected_at: null, latest_sync: null });
+        setMobileProfile(null);
+        setMobileFreshness([]);
+      }
+    })();
+  }, [selectedUserId]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [healthResponse, infoResponse] = await Promise.all([getMobileHealth(), getServerInfo()]);
+        setMobileHealth(healthResponse.data);
+        const info = infoResponse.data || {};
+        setServerInfo(info);
+        if (info.local_ips?.length) {
+          setServer((previous) => previous.ip === 'localhost' ? { ...previous, ip: info.local_ips[0] } : previous);
+        }
+      } catch {
+        setMobileHealth({ status: 'offline', server: null, version: null, timestamp: null });
+        setServerInfo({ hostname: null, localhost_url: null, local_ips: [], mobile_base_urls: [] });
+      }
+    })();
+  }, []);
 
   const save = async () => {
     try {
@@ -84,6 +145,10 @@ export default function Settings() {
     <div className="space-y-6">
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
         <div className="font-semibold text-slate-900 mb-4">Users</div>
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <div className="text-sm font-semibold text-emerald-900">Active profile: {selectedUser.name}</div>
+          <div className="text-xs text-emerald-700 mt-1">All dashboard metrics, doctor contacts, alerts, family state, and Spotify status shown below belong to `{selectedUser.id}` only.</div>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div>
             <div className="text-sm font-medium text-slate-700 mb-3">Existing Users</div>
@@ -129,9 +194,102 @@ export default function Settings() {
           <input value={server.ip} onChange={(event) => setServer({ ...server, ip: event.target.value })} placeholder="IP" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
           <input value={server.port} onChange={(event) => setServer({ ...server, port: event.target.value })} placeholder="Port" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
         </div>
+        <div className="text-xs text-slate-500 mt-3">
+          For a real iPhone on your Wi-Fi, replace <span className="font-mono">localhost</span> with your Mac&apos;s LAN IP. Current mobile base URL: <span className="font-mono">{mobileBaseUrl}</span>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Laptop Hostname</div>
+            <div className="text-sm font-medium text-slate-900 mt-1">{serverInfo.hostname || 'Unknown'}</div>
+            <div className="text-xs text-slate-500 mt-2">Local simulator URL</div>
+            <div className="text-sm font-mono text-slate-800 mt-1">{serverInfo.localhost_url || 'http://127.0.0.1:8000'}</div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Detected Laptop IPs</div>
+            {serverInfo.mobile_base_urls?.length ? (
+              <div className="space-y-2 mt-2">
+                {serverInfo.mobile_base_urls.map((url) => (
+                  <div key={url} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                    <div className="text-sm font-mono text-slate-800">{url}</div>
+                    <div className="text-xs text-slate-500 mt-1">Use this on the iPhone when both devices are on the same Wi-Fi.</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-sm text-slate-500 mt-2">No LAN IP detected yet. Connect the laptop to Wi-Fi and refresh this page.</div>
+            )}
+          </div>
+        </div>
       </div>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <div className="font-semibold text-slate-900 mb-4">Medical Contacts</div>
+        <div className="font-semibold text-slate-900 mb-1">iPhone App Integration</div>
+        <div className="text-sm text-slate-500 mb-4">Visible mobile sync status for {selectedUser.name}. The iOS app talks to the same backend as the web app.</div>
+        <div className={`rounded-xl border px-4 py-3 mb-4 ${mobileHealth.status === 'ok' ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+          <div className="text-sm font-semibold text-slate-800">
+            {mobileHealth.status === 'ok' ? 'Mobile API is reachable' : 'Mobile API is not responding'}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            Server: {mobileHealth.server || 'unknown'} • version {mobileHealth.version || 'unknown'} • last check {formatDateTime(mobileHealth.timestamp)}
+          </div>
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Active Mobile User</div>
+              <div className="text-sm font-semibold text-slate-900 mt-1">{selectedUser.name} ({selectedUser.id})</div>
+              <div className="text-xs text-slate-500 mt-1">Profile version: {mobileProfile?.profile_version || 'Not loaded yet'}</div>
+              <div className="text-xs text-slate-500 mt-1">Last profile contract update: {formatDateTime(mobileProfile?.updated_at)}</div>
+            </div>
+            <div className="space-y-3">
+              {mobileDataRows.map((item) => (
+                <div key={item.source} className="rounded-xl border border-slate-200 px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">{item.label}</div>
+                    <div className={`text-xs font-medium uppercase tracking-wide ${item.status === 'fresh' ? 'text-emerald-700' : item.status === 'due_soon' ? 'text-amber-700' : 'text-red-700'}`}>
+                      {String(item.status).replaceAll('_', ' ')}
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-2">Last sync: {formatDateTime(item.last_synced)}</div>
+                  <div className="text-xs text-slate-500 mt-1">Recommended every {item.recommended_interval_days} days</div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    {item.days_since_upload == null ? 'No sync yet' : `${item.days_since_upload} days since last sync`}
+                  </div>
+                </div>
+              ))}
+              {!mobileDataRows.length && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">
+                  No iPhone-originated sync has been recorded for this user yet.
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">How It Works</div>
+              <div className="text-sm text-slate-700 mt-2">1. Open the iOS app in Xcode from the existing `health_app` project.</div>
+              <div className="text-sm text-slate-700 mt-1">2. Point the app to <span className="font-mono">{mobileBaseUrl}</span>.</div>
+              <div className="text-sm text-slate-700 mt-1">3. Use the same EirView user id: <span className="font-mono">{selectedUser.id}</span>.</div>
+              <div className="text-sm text-slate-700 mt-1">4. HealthKit and manual iPhone inputs sync into this user profile and update the same dashboard you see on the web.</div>
+              <div className="text-sm text-slate-700 mt-1">5. On the web, successful phone syncs also show up in Data Ingest under iPhone / Apple sync activity and refresh windows.</div>
+            </div>
+            <div className="rounded-xl border border-slate-200 px-4 py-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Mobile Source Status</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                {Object.entries(mobileProfile?.source_status || {}).map(([key, value]) => (
+                  <div key={key} className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2">
+                    <div className="text-xs text-slate-500">{key.replaceAll('_', ' ')}</div>
+                    <div className="text-sm font-medium text-slate-800 mt-1">{value?.present ? 'Present' : 'Missing'}</div>
+                    <div className="text-xs text-slate-500 mt-1">{formatDateTime(value?.last_sync)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        <div className="font-semibold text-slate-900 mb-1">Medical Contacts</div>
+        <div className="text-sm text-slate-500 mb-4">Editing doctor and emergency contacts for {selectedUser.name} ({selectedUser.id}).</div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Object.keys(contacts).filter((key) => key !== 'privacy_level').map((key) => (
             <input key={key} value={contacts[key]} onChange={(event) => setContacts({ ...contacts, [key]: event.target.value })} placeholder={key.replace(/_/g, ' ')} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
@@ -140,7 +298,23 @@ export default function Settings() {
         <button onClick={save} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition mt-4">Save</button>
       </div>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-        <div className="font-semibold text-slate-900 mb-4">Spotify Integration</div>
+        <div className="font-semibold text-slate-900 mb-1">Spotify Integration</div>
+        <div className="text-sm text-slate-500 mb-4">Spotify is connected separately for each user profile.</div>
+        <div className={`mb-4 rounded-xl border px-4 py-3 ${spotifyStatus.connected ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50'}`}>
+          <div className="text-sm font-semibold text-slate-800">
+            {spotifyStatus.connected ? `Connected for ${selectedUser.name}` : `Not connected for ${selectedUser.name}`}
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            {spotifyStatus.connected
+              ? `Last token update: ${spotifyStatus.connected_at || 'unknown'}`
+              : 'Authorize Spotify while this user is active to keep listening insights tied to the correct profile.'}
+          </div>
+          {spotifyStatus.latest_sync && (
+            <div className="text-xs text-slate-500 mt-2">
+              Latest sync: {spotifyStatus.latest_sync.timestamp} • {spotifyStatus.latest_sync.track_count} tracks • valence {spotifyStatus.latest_sync.avg_valence}
+            </div>
+          )}
+        </div>
         <button onClick={connectSpotify} className="bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg px-4 py-2 font-medium transition">Connect Spotify</button>
       </div>
       <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">

@@ -45,6 +45,9 @@ export default function MealAnalysis({ analysis }) {
         ))}
         {!analysis.flags?.length && <div className="flex items-center gap-2 text-emerald-700 text-sm"><CheckCircle size={16} /> Meal is within your current targets.</div>}
         <div className="text-lg font-semibold mt-3">Score: {(analysis.health_score || analysis.score || 7.2)}/10</div>
+        <div className="text-sm text-slate-500 mt-2">
+          This meal analysis is now available to the Nutrition Coach below, so you can ask AI about this exact upload.
+        </div>
       </div>
     </div>
   );
