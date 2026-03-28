@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+from typing import Any
+
+import aiosqlite
+
+from backend.formulas import calculate_bio_age
+
+WORKOUT_IMPACT_MAP: dict[str, dict[str, float]] = {
+    "running": {"cv": -0.3, "neuro": -0.1},
+    "walking": {"cv": -0.15},
+    "weight_training": {"msk": -0.3, "met": -0.1},
+    "yoga": {"msk": -0.2, "neuro": -0.2},
+    "hiit": {"cv": -0.4, "met": -0.15},
+    "swimming": {"cv": -0.3, "msk": -0.15},
+    "cycling": {"cv": -0.25, "msk": -0.1},
+}
+
+
+async def log_workout(user_id: str, workout_data: dict[str, Any], db: aiosqlite.Connection) -> dict[str, Any]:
+    """Log a workout with computed bio-age impacts."""
+
+    workout_type = str(workout_data.get("type", "walking")).lower().replace(" ", "_")
+    impacts = dict(WORKOUT_IMPACT_MAP.get(workout_type, {"cv": -0.1}))
+    duration = int(workout_data.get("duration_min") or 30)
+    scale = min(duration / 30.0, 2.0)
+    scaled = {key: round(value * scale, 3) for key, value in impacts.items()}
+    cursor = await db.execute(
+        """
+        INSERT INTO workouts (user_id, type, duration_min, calories, source, date, cv_impact, msk_impact, met_impact, neuro_impact)
+        VALUES (?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            user_id,
+            workout_type,
+            duration,
+            workout_data.get("calories"),
+            workout_data.get("source", "manual"),
+            workout_data.get("date", str(date.today())),
+            scaled.get("cv"),
+            scaled.get("msk"),
+            scaled.get("met"),
+            scaled.get("neuro"),
+        ),
+    )
+    await db.commit()
+    return {
+        "id": cursor.lastrowid,
+        "user_id": user_id,
+        "type": workout_type,
+        "duration_min": duration,
+        "calories": workout_data.get("calories"),
+        "source": workout_data.get("source", "manual"),
+        "date": workout_data.get("date", str(date.today())),
+        "impact": scaled,
+    }
+
+
+async def get_workouts(user_id: str, db: aiosqlite.Connection, limit: int = 20) -> list[dict[str, Any]]:
+    """Fetch recent workouts for a user."""
+
+    rows = await (
+        await db.execute("SELECT * FROM workouts WHERE user_id=? ORDER BY date DESC, timestamp DESC LIMIT ?", (user_id, limit))
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+async def get_workout_summary(user_id: str, db: aiosqlite.Connection, days: int = 7) -> dict[str, Any]:
+    """Summarize workouts over the last N days."""
+
+    since = str(date.today() - timedelta(days=days - 1))
+    rows = await (
+        await db.execute("SELECT * FROM workouts WHERE user_id=? AND date>=? ORDER BY date ASC", (user_id, since))
+    ).fetchall()
+    total_minutes = sum(int(row["duration_min"] or 0) for row in rows)
+    total_calories = round(sum(float(row["calories"] or 0) for row in rows), 1)
+    workout_types: dict[str, int] = {}
+    impact_totals = {"cv": 0.0, "msk": 0.0, "met": 0.0, "neuro": 0.0}
+    chart_days = []
+    for offset in range(days):
+        current = date.today() - timedelta(days=days - offset - 1)
+        day_rows = [row for row in rows if row["date"] == str(current)]
+        chart_days.append({"day": current.strftime("%a"), "minutes": sum(int(row["duration_min"] or 0) for row in day_rows)})
+    for row in rows:
+        workout_types[row["type"]] = workout_types.get(row["type"], 0) + 1
+        for key in impact_totals:
+            impact_totals[key] += float(row[f"{key}_impact"] or 0)
+    return {
+        "total_sessions": len(rows),
+        "total_minutes": total_minutes,
+        "total_calories": total_calories,
+        "workout_types": workout_types,
+        "impact_totals": {key: round(value, 2) for key, value in impact_totals.items()},
+        "avg_sessions_per_week": round(len(rows) * 7 / max(days, 1), 1),
+        "chart": chart_days,
+    }
+
+
+def workout_targets(profile: dict[str, Any]) -> dict[str, Any]:
+    """Generate profile-aware weekly workout recommendations."""
+
+    from backend.formulas import workout_targets as formula_workout_targets
+
+    return formula_workout_targets(profile)
+
+
+async def get_workout_targets(user_id: str, db: aiosqlite.Connection) -> dict[str, Any]:
+    """Fetch the user's profile and return workout targets."""
+
+    row = await (
+        await db.execute(
+            """
+            SELECT p.*, u.age, u.sex, u.height_cm
+            FROM profiles p JOIN users u ON u.id=p.user_id
+            WHERE p.user_id=?
+            """,
+            (user_id,),
+        )
+    ).fetchone()
+    return workout_targets(dict(row) if row else {})
+
+
+def check_inactivity(profile: dict[str, Any], current_hour: int) -> dict[str, Any] | None:
+    """Check if user is behind on daily activity and should be nudged."""
+
+    hours_awake = max(current_hour - 7, 1)
+    steps_avg = profile.get("steps_avg_7d") or 7500
+    current_steps = profile.get("steps_today") or 0
+    expected_steps = (steps_avg / 16) * hours_awake
+    if current_steps < expected_steps * 0.6:
+        behind = int(expected_steps - current_steps)
+        return {
+            "type": "step_nudge",
+            "message": f"You're {behind:,} steps behind your usual pace. A 15-minute walk would help close the gap.",
+            "steps_behind": behind,
+            "suggested_activity": "Take a 15-minute walk",
+        }
+    if (profile.get("exercise_min") or 0) < 10 and current_hour >= 18:
+        return {
+            "type": "exercise_nudge",
+            "message": "You have not moved much today. A short session still counts.",
+            "steps_behind": None,
+            "suggested_activity": "Try 10 minutes of mobility or bodyweight exercise",
+        }
+    return None

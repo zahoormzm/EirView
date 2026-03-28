@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+.git
+assets
+data
+notebooks
+outputs
+stats
+src
+scripts
+*.h5
+*.md
+.gitignore
+.dockerignore

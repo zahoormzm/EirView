@@ -1,0 +1,27 @@
+import { create } from 'zustand';
+
+const useStore = create((set) => ({
+  selectedUserId: 'zahoor',
+  users: [],
+  profile: null,
+  dashboard: null,
+  gamification: null,
+  reminders: [],
+  alerts: [],
+  loading: false,
+  toast: null,
+  setSelectedUser: (id) => set({ selectedUserId: id }),
+  setUsers: (users) => set({ users }),
+  setProfile: (profile) => set({ profile }),
+  setDashboard: (dashboard) => set({ dashboard }),
+  setGamification: (gamification) => set({ gamification }),
+  setReminders: (reminders) => set({ reminders }),
+  setAlerts: (alerts) => set({ alerts }),
+  setLoading: (loading) => set({ loading }),
+  showToast: (message, type = 'success') => {
+    set({ toast: { message, type } });
+    setTimeout(() => set({ toast: null }), 5000);
+  }
+}));
+
+export default useStore;

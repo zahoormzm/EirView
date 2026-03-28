@@ -1,0 +1,16 @@
+import { Sparkles } from 'lucide-react';
+import ChatInterface from '../components/ChatInterface';
+import useStore from '../store';
+
+export default function FutureSelf() {
+  const { selectedUserId, profile } = useStore();
+  return (
+    <div>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
+        <div className="flex items-center gap-2 font-semibold text-blue-800"><Sparkles size={18} className="text-blue-500" /> Talk to Your Future Self</div>
+        <div className="text-sm text-blue-700 mt-2">You're chatting with {(profile?.age || 19) + 15}-year-old you — the version that lived through the next 15 years with your current data.</div>
+      </div>
+      <ChatInterface chatType="future" userId={selectedUserId} title="Future Self" placeholder="Ask your future self anything..." tall />
+    </div>
+  );
+}

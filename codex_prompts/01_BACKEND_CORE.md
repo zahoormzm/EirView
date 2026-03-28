@@ -106,6 +106,12 @@ This is the main model representing a user's complete health state. Fields must 
 - `stress_level: int | None = None`
 - `screen_time_hours: float | None = None`
 
+**Academic (student-focused):**
+- `academic_gpa: float | None = None` — Current GPA/CGPA (0.0–4.0 scale)
+- `study_hours_daily: float | None = None` — Average daily study hours
+- `exam_stress: int | None = None` — Self-reported exam/academic stress (1-10)
+- `academic_year: str | None = None` — e.g. "Year 1", "Semester 4"
+
 **Family history (booleans):**
 - `family_diabetes: bool = False`
 - `family_heart: bool = False`
@@ -258,6 +264,9 @@ CREATE TABLE IF NOT EXISTS profiles (
     -- Mental
     phq9_score INTEGER, stress_level INTEGER,
     screen_time_hours REAL,
+    -- Academic
+    academic_gpa REAL, study_hours_daily REAL,
+    exam_stress INTEGER, academic_year TEXT,
     -- Family history
     family_diabetes BOOLEAN DEFAULT 0, family_heart BOOLEAN DEFAULT 0,
     family_hypertension BOOLEAN DEFAULT 0, family_mental BOOLEAN DEFAULT 0,
@@ -594,6 +603,7 @@ Seed the following data:
     "posture_score_pct": 72,
     # Mental
     "phq9_score": 6, "stress_level": 5, "screen_time_hours": 8,
+    "academic_gpa": 3.5, "study_hours_daily": 5, "exam_stress": 6, "academic_year": "Year 2",
     # Lifestyle
     "exercise_hours_week": 4, "sleep_target": 8, "smoking": "never", "diet_quality": "average",
     # Family history
@@ -620,6 +630,7 @@ Seed the following data:
     "exercise_min": 8, "sleep_hours": 5.5, "sleep_deep_pct": 10, "sleep_rem_pct": 15,
     "vo2max": 32,
     "phq9_score": 12, "stress_level": 7, "screen_time_hours": 11,
+    "academic_gpa": 2.4, "study_hours_daily": 9, "exam_stress": 9, "academic_year": "Year 3",
     "family_diabetes": 1,
 }
 
@@ -643,6 +654,7 @@ Seed the following data:
     "exercise_min": 65, "sleep_hours": 7.8, "sleep_deep_pct": 22, "sleep_rem_pct": 25,
     "vo2max": 52,
     "phq9_score": 3, "stress_level": 3, "screen_time_hours": 4,
+    "academic_gpa": 3.9, "study_hours_daily": 4, "exam_stress": 3, "academic_year": "Year 1",
     "exercise_hours_week": 8, "diet_quality": "excellent",
 }
 
@@ -835,6 +847,14 @@ Sum the following, clamp to [-6, +6]:
 | Screen time | 4-8h | 0 |
 | Screen time | 8-12h | +0.5 |
 | Screen time | >12h | +1.0 |
+| Exam stress (1-10) | 1-3 | 0 |
+| Exam stress | 4-6 | +0.3 |
+| Exam stress | 7-8 | +0.7 |
+| Exam stress | 9-10 | +1.5 |
+| Study hours/day | <2h | 0 |
+| Study hours/day | 2-6h | 0 |
+| Study hours/day | 6-10h | +0.3 |
+| Study hours/day | >10h (burnout risk) | +1.0 |
 
 ### `project_risk(profile: dict, years: int = 15) -> list[dict]`
 
@@ -882,6 +902,9 @@ def project_risk(profile: dict, years: int = 15) -> list[dict]:
     if profile.get('stress_level', 0) > 7: mental_mult *= 1.3
     if profile.get('vitamin_d', 30) < 20: mental_mult *= 1.3
     if profile.get('family_mental'): mental_mult *= 1.5
+    # Academic burnout: high exam stress + excessive study hours
+    if profile.get('exam_stress', 0) > 7: mental_mult *= 1.3
+    if profile.get('study_hours_daily', 0) > 8 and profile.get('sleep_hours', 8) < 6: mental_mult *= 1.4
 
     results = []
     for year in range(1, years + 1):
@@ -937,6 +960,17 @@ def mental_wellness_score(profile: dict) -> dict:
     screen_penalty = max(0, (screen - 6) * 1.67)
     breakdown['screen_penalty'] = round(min(screen_penalty, 10), 1)
     score -= min(screen_penalty, 10)
+
+    # Academic stress penalty (max 10)
+    exam_stress = profile.get('exam_stress', 0)
+    study_hrs = profile.get('study_hours_daily', 0)
+    academic_penalty = 0
+    if exam_stress > 6:
+        academic_penalty += (exam_stress - 6) * 1.5  # up to 6 pts
+    if study_hrs > 8:
+        academic_penalty += min(study_hrs - 8, 2) * 2  # up to 4 pts for >8h/day
+    breakdown['academic_penalty'] = round(min(academic_penalty, 10), 1)
+    score -= min(academic_penalty, 10)
 
     # Inactivity penalty (max 10)
     exercise = profile.get('exercise_min', 30)
