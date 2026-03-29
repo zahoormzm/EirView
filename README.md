@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="frontend/public/eirview-brand.png" alt="EirView" width="400"/>
+</p>
+
 # EirView
 
 EirView is a full-stack health intelligence platform that combines deterministic health calculations, multi-source data ingestion, and AI-assisted coaching. It runs locally with a React frontend, a FastAPI backend, SQLite storage, and a small agent/tool layer for guided reasoning tasks.
