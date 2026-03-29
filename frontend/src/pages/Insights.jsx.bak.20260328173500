@@ -24,7 +24,6 @@ export default function Insights() {
   const { dashboard, profile, insightSimulation } = useStore();
   const topChange = dashboard?.bio_age?.contributing_factors?.[0];
   const simulation = insightSimulation?.simulation;
-  const simulationDuration = simulation?.duration?.label || '6 months';
   const simulatedTenYear = findYear(simulation?.new_risk_projections, 10);
   const currentTenYear = findYear(dashboard?.risk_projections, 10);
   const scenarioSleep = insightSimulation?.changes?.sleep;
@@ -66,9 +65,6 @@ export default function Insights() {
       : null,
     insightSimulation?.changes?.screen_time !== undefined && profile?.screen_time_hours !== undefined
       ? `screen time from ${profile.screen_time_hours}h to ${insightSimulation.changes.screen_time}h`
-      : null,
-    insightSimulation?.changes?.duration
-      ? `holding the scenario for ${simulationDuration.toLowerCase()}`
       : null,
   ].filter(Boolean);
   const nextStepText = simulation
@@ -113,7 +109,7 @@ export default function Insights() {
           <div>
             <div className="text-lg font-semibold text-slate-900">How To Read Your Last Simulation</div>
             <div className="text-sm text-slate-600 mt-1">
-              This is a hypothetical outcome, not a saved profile change. The scenario assumes you hold these habits for <span className="font-medium text-slate-900">{simulationDuration}</span>.
+              This is a hypothetical outcome, not a saved profile change.
               {scenarioSleep !== undefined && currentSleep !== undefined && (
                 <> You tested sleep moving from <span className="font-medium text-slate-900">{currentSleep}h</span> to <span className="font-medium text-slate-900">{scenarioSleep}h</span>.</>
               )}
@@ -149,37 +145,6 @@ export default function Insights() {
           {insightSimulation?.narrative && (
             <div className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 leading-relaxed">
               {insightSimulation.narrative}
-            </div>
-          )}
-          {simulation?.exact_math && (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">How EirView Calculated This</div>
-              <div className="text-xs text-slate-600 mt-2 font-mono">
-                {simulation.exact_math.formula}
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 mt-4 text-sm">
-                <div>
-                  <div className="text-xs uppercase tracking-wide font-semibold text-slate-500 mb-2">Current subsystem deltas</div>
-                  <div className="space-y-1 text-slate-700">
-                    <div>cv: {simulation.exact_math.current_deltas?.cv}</div>
-                    <div>met: {simulation.exact_math.current_deltas?.met}</div>
-                    <div>msk: {simulation.exact_math.current_deltas?.msk}</div>
-                    <div>neuro: {simulation.exact_math.current_deltas?.neuro}</div>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs uppercase tracking-wide font-semibold text-slate-500 mb-2">Projected subsystem deltas</div>
-                  <div className="space-y-1 text-slate-700">
-                    <div>cv: {simulation.exact_math.projected_deltas?.cv} <span className={deltaClass(simulation.exact_math.delta_shift?.cv || 0)}>({simulation.exact_math.delta_shift?.cv >= 0 ? '+' : ''}{simulation.exact_math.delta_shift?.cv})</span></div>
-                    <div>met: {simulation.exact_math.projected_deltas?.met} <span className={deltaClass(simulation.exact_math.delta_shift?.met || 0)}>({simulation.exact_math.delta_shift?.met >= 0 ? '+' : ''}{simulation.exact_math.delta_shift?.met})</span></div>
-                    <div>msk: {simulation.exact_math.projected_deltas?.msk} <span className={deltaClass(simulation.exact_math.delta_shift?.msk || 0)}>({simulation.exact_math.delta_shift?.msk >= 0 ? '+' : ''}{simulation.exact_math.delta_shift?.msk})</span></div>
-                    <div>neuro: {simulation.exact_math.projected_deltas?.neuro} <span className={deltaClass(simulation.exact_math.delta_shift?.neuro || 0)}>({simulation.exact_math.delta_shift?.neuro >= 0 ? '+' : ''}{simulation.exact_math.delta_shift?.neuro})</span></div>
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-slate-500 mt-4">
-                Weights applied: cv {simulation.exact_math.weights?.cv}, met {simulation.exact_math.weights?.met}, msk {simulation.exact_math.weights?.msk}, neuro {simulation.exact_math.weights?.neuro}.
-              </div>
             </div>
           )}
           {riskComparisons.length > 0 && (

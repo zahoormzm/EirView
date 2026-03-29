@@ -20,7 +20,6 @@ from backend.agents import coach, collector, mental_health, mirror, runner, time
 from backend.ai_router import ai_router
 from backend.alerts import check_alerts, notify_doctor, process_alerts
 from backend.database import (
-    PROFILE_COLUMNS,
     create_user,
     get_all_users,
     get_db,
@@ -486,15 +485,11 @@ def _build_simulation_narrative(profile: dict[str, Any], changes: dict[str, Any]
     improvement = _safe_float(simulation.get("improvement")) or 0.0
     overall_current = _safe_float(current.get("overall")) or 0.0
     overall_projected = _safe_float(projected.get("overall")) or overall_current
-    duration_label = str(((simulation.get("duration") or {}).get("label")) or "3 months")
     changed_inputs: list[str] = []
     if "sleep" in changes:
         changed_inputs.append(f"sleep from {(_safe_float(profile.get('sleep_hours')) or 0):.1f}h to {(_safe_float(changes.get('sleep')) or 0):.1f}h")
     if "exercise" in changes:
-        projected_minutes = int(float(changes.get("exercise") or 0) * 60 / 7)
-        current_minutes = int(_safe_float(profile.get("exercise_min")) or 0)
         changed_inputs.append(f"exercise from {(_safe_float(profile.get('exercise_hours_week')) or 0):.1f} to {(_safe_float(changes.get('exercise')) or 0):.1f} hours/week")
-        changed_inputs.append(f"daily exercise minutes from {current_minutes} to {projected_minutes}")
     if "diet" in changes:
         diet_labels = {1: "poor", 2: "average", 3: "good", 4: "excellent"}
         changed_inputs.append(
@@ -535,11 +530,7 @@ def _build_simulation_narrative(profile: dict[str, Any], changes: dict[str, Any]
             direction = "higher" if top_risk_delta > 0 else "lower"
             risk_shift_text = f" The clearest 10-year change is {top_risk}, moving {abs(top_risk_delta):.1f} points {direction}."
 
-    change_text = (
-        f"If you maintained this pattern for {duration_label.lower()}, you would be testing {', '.join(changed_inputs)}."
-        if changed_inputs
-        else f"If you maintained this pattern for {duration_label.lower()}, you would be testing a hypothetical lifestyle change."
-    )
+    change_text = f"You tested {', '.join(changed_inputs)}." if changed_inputs else "You tested a hypothetical lifestyle change."
     direction_text = (
         f" That improves projected biological age from {overall_current:.1f} to {overall_projected:.1f}, making you {improvement:.1f} years biologically younger."
         if improvement > 0
@@ -993,7 +984,6 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "steps": base_steps + estimated_steps,
             "steps_base": base_steps,
             "steps_from_logged_activity": estimated_steps,
-            "steps_are_estimated": bool(activity_overlay.get("steps_estimated")),
             "sleep": profile.get("sleep_hours"),
             "vo2max": profile.get("vo2max"),
             "spo2": profile.get("blood_oxygen_pct"),
@@ -1141,24 +1131,12 @@ async def upload_apple_health(file: UploadFile = File(...), user_id: str = Form(
             tmp_path = tmp.name
         health_data = parse_apple_health_file(tmp_path)
         workouts = health_data.pop("workouts_7d", [])
-        detected_metrics = {key: value for key, value in health_data.items() if value is not None}
-        profile_updates_applied = {key: value for key, value in detected_metrics.items() if key in PROFILE_COLUMNS}
-        ignored_metrics = {key: value for key, value in detected_metrics.items() if key not in PROFILE_COLUMNS}
-        profile = await update_profile_fields(user_id, profile_updates_applied, db)
+        profile = await update_profile_fields(user_id, health_data, db)
         await _touch_data_source(db, user_id, "apple_health", 2)
         for workout in workouts:
             await log_workout(user_id, workout, db)
         await db.commit()
-        return {
-            "success": True,
-            "metrics_updated": list(profile_updates_applied.keys()),
-            "metrics_detected": list(detected_metrics.keys()),
-            "profile_updates_applied": profile_updates_applied,
-            "ignored_metrics": ignored_metrics,
-            "workouts_found": len(workouts),
-            "data": detected_metrics,
-            "profile": profile,
-        }
+        return {"success": True, "metrics_updated": list(health_data.keys()), "workouts_found": len(workouts), "data": health_data, "profile": profile}
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)

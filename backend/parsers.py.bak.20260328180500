@@ -545,17 +545,6 @@ def parse_apple_health_xml(file_path: str) -> dict:
         "HKQuantityTypeIdentifierFlightsClimbed": "flights_climbed",
         "HKQuantityTypeIdentifierOxygenSaturation": "blood_oxygen_pct",
     }
-    def normalize_record_value(record_type: str, raw_value: str) -> float | None:
-        try:
-            value = float(raw_value)
-        except (TypeError, ValueError):
-            return None
-        if record_type == "HKQuantityTypeIdentifierOxygenSaturation":
-            if 0 < value <= 1:
-                value *= 100
-            if value < 50 or value > 100:
-                return None
-        return value
     try:
         iterator = et.iterparse(file_path, events=("end",))
     except (FileNotFoundError, et.ParseError, OSError):
@@ -573,9 +562,10 @@ def parse_apple_health_xml(file_path: str) -> dict:
                     continue
                 record_type = elem.get("type", "")
                 if record_type in type_map:
-                    normalized = normalize_record_value(record_type, elem.get("value", "0"))
-                    if normalized is not None:
-                        metrics[type_map[record_type]].append(normalized)
+                    try:
+                        metrics[type_map[record_type]].append(float(elem.get("value", 0)))
+                    except ValueError:
+                        pass
                 if record_type == "HKCategoryTypeIdentifierSleepAnalysis":
                     sleep_samples.append({"startDate": elem.get("startDate", ""), "endDate": elem.get("endDate", ""), "value": elem.get("value", "")})
                 elem.clear()

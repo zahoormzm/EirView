@@ -14,7 +14,7 @@ export default function StepProgressRing({ current = 0, goal = 7500, size = 160,
         <text x={center} y={center} textAnchor="middle" className={`fill-slate-900 ${compact ? 'text-[16px]' : 'text-[20px]'} font-mono font-medium`}>{current.toLocaleString()}</text>
         <text x={center} y={center + 18} textAnchor="middle" className="fill-slate-400 text-[12px]">/ {goal.toLocaleString()}</text>
       </svg>
-      <div className={`${compact ? 'text-xs mt-2' : 'text-sm mt-3'} text-slate-500 text-center`}>steps today{note ? ' (estimated + tracked)' : ''}</div>
+      <div className={`${compact ? 'text-xs mt-2' : 'text-sm mt-3'} text-slate-500 text-center`}>steps today</div>
       {note ? <div className="mt-2 text-[11px] text-slate-400 text-center">{note}</div> : null}
     </div>
   );
