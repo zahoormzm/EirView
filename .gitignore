@@ -50,5 +50,3 @@ apple_health_export/
 *.pem
 credentials.json
 
-# Claude Code
-.claude/

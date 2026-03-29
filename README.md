@@ -1,8 +1,8 @@
 # EirView
 
-EirView is a full-stack health intelligence platform that combines deterministic health calculations, multi-source data ingestion, and AI-assisted coaching. The application is built with a React frontend, a FastAPI backend, SQLite storage, and a small agent/tool layer for guided reasoning tasks.
+EirView is a full-stack health intelligence platform that combines deterministic health calculations, multi-source data ingestion, and AI-assisted coaching. It runs locally with a React frontend, a FastAPI backend, SQLite storage, and a small agent/tool layer for guided reasoning tasks.
 
-## What The Project Does
+## What It Does
 
 - Computes biological age across cardiovascular, metabolic, musculoskeletal, and neurological subsystems
 - Tracks health data from blood reports, body composition scans, Apple Health exports, meals, posture checks, and manual entries
@@ -12,23 +12,15 @@ EirView is a full-stack health intelligence platform that combines deterministic
 
 ## Stack
 
-### Frontend
+**Frontend**
+- React 19, Vite, Tailwind CSS, Zustand, Recharts
 
-- React 19
-- Vite
-- Tailwind CSS
-- Zustand
-- Recharts
-
-### Backend
-
-- FastAPI
-- SQLite with `aiosqlite`
+**Backend**
+- FastAPI, SQLite with `aiosqlite`
 - Deterministic health and risk logic in Python
-- Anthropic and Gemini integrations for selected parsing and coaching flows
+- Claude and Gemini API integrations for parsing and coaching flows
 
-### Supporting Services
-
+**Supporting Services**
 - Spotify Web API
 - OpenWeatherMap
 - USDA food data
@@ -37,7 +29,7 @@ EirView is a full-stack health intelligence platform that combines deterministic
 
 ## Repository Layout
 
-```text
+```
 Health/
 ├── backend/
 │   ├── main.py
@@ -67,69 +59,54 @@ Health/
 └── ...
 ```
 
-## Core Product Areas
+## Core Features
 
-### Health Modeling
-
-- Biological age scoring
+**Health Modeling**
+- Biological age scoring across subsystems
 - Mental wellness scoring
-- Risk projection
-- Habit simulation
-- Workout target generation
-- Nutrition target generation
+- Risk projection and habit simulation
+- Workout and nutrition target generation
 
-### Data Ingestion
-
-- Blood report upload
-- Cult.fit/body composition scan upload
+**Data Ingestion**
+- Blood report upload (PDF parsing)
+- Cult.fit / body composition scan upload
 - Apple Health zip or XML import
-- Meal photo or meal text analysis
-- Face age upload
+- Meal photo or text analysis
+- Face age estimation
 - Browser-based posture checks
 
-### Coaching And Guidance
-
-- Coach chat
-- Mental health chat
-- Future Self chat
-- Contextual reminders
-- Specialist recommendations
+**Coaching & Guidance**
+- Coach chat, mental health chat, Future Self chat
+- Contextual reminders and specialist recommendations
 - Doctor-report generation
 
 ## Local Development
 
-### Requirements
-
+**Requirements**
 - Python 3.12+
 - Node.js 20+
 - npm
 
-### 1. Create And Activate A Virtual Environment
+### 1. Set up the backend
 
 ```bash
-cd /Users/zahoormashahir/Documents/Projects/Health
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-### 2. Install Backend Dependencies
-
-```bash
 pip install -r backend/requirements.txt
 ```
 
-### 3. Install Frontend Dependencies
+### 2. Set up the frontend
 
 ```bash
-cd /Users/zahoormashahir/Documents/Projects/Health/frontend
+cd frontend
 npm install
 ```
 
-### 4. Configure Environment Variables
+### 3. Configure environment variables
 
-Copy `.env.example` to `.env` at the repository root and populate the keys you need.
+Copy `.env.example` to `.env` at the repository root and fill in the keys you need.
 
-Minimum useful setup:
+Minimum setup:
 
 ```env
 ANTHROPIC_API_KEY=
@@ -155,57 +132,41 @@ SMTP_FROM_EMAIL=
 SMTP_FROM_NAME=EirView Alerts
 ```
 
-## Running The Application
+### 4. Run
 
-### Backend
+Backend:
 
 ```bash
-cd /Users/zahoormashahir/Documents/Projects/Health
 source .venv/bin/activate
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir backend
 ```
 
-### Frontend
+Frontend (in a separate terminal):
 
 ```bash
-cd /Users/zahoormashahir/Documents/Projects/Health/frontend
+cd frontend
 npm run dev -- --host 127.0.0.1
 ```
 
-### URLs
+- Frontend: http://127.0.0.1:5173
+- API docs: http://127.0.0.1:8000/docs
 
-- Frontend: [http://127.0.0.1:5173](http://127.0.0.1:5173)
-- API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+## Notes
 
-## Notes On Optional Features
+**Face Age** — requires local model assets under `FaceAge-main/models/`. That directory is not committed to the repo.
 
-### Face Age
+**Posture** — runs entirely in the browser via MediaPipe Tasks Web; readings are stored through the backend.
 
-Face age inference requires local model assets under `FaceAge-main/models/`. That directory is treated as a local runtime dependency and is intentionally not committed to the repository.
+**Weather / AQI** — falls back to cached/default conditions if `OPENWEATHERMAP_API_KEY` is not set.
 
-### Posture
-
-The current posture feature runs in the browser using MediaPipe Tasks Web and stores readings through the backend.
-
-### Weather And AQI
-
-Weather-driven suggestions fall back to cached/default conditions if `OPENWEATHERMAP_API_KEY` is not configured.
-
-### Spotify
-
-Spotify integration is per EirView user and requires the OAuth redirect URI in Spotify developer settings to match the value in `.env`.
+**Spotify** — per-user OAuth; the redirect URI in your Spotify developer dashboard must match the value in `.env`.
 
 ## Validation
 
-Useful local checks:
-
 ```bash
-cd /Users/zahoormashahir/Documents/Projects/Health
+# From repo root
 python3 -m py_compile backend/main.py backend/formulas.py backend/reminder_engine.py backend/activity.py
+
 cd frontend
 npm run build
 ```
-
-## Project Status
-
-This repository contains a working application with active product features and several optional integrations. The backend and frontend are designed to run locally together, with SQLite as the default development datastore.
