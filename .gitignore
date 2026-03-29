@@ -22,12 +22,17 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+.cache
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Local backups and temporary edits
+*.bak
+*.bak.*
 
 # Large files (models, health data)
 FaceAge-main/models/*.onnx

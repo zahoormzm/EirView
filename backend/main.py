@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from backend.activity import check_inactivity, get_today_activity_overlay, get_workout_summary, get_workouts, get_workout_targets, log_workout
+from backend.activity import assess_outdoor_conditions, check_inactivity, get_today_activity_overlay, get_workout_summary, get_workouts, get_workout_targets, log_workout
 from backend.agents import coach, collector, mental_health, mirror, runner, time_machine
 from backend.ai_router import ai_router
 from backend.alerts import check_alerts, notify_doctor, process_alerts
@@ -44,6 +44,7 @@ from backend.reports import build_doctor_report, render_doctor_report_text
 from backend.reminder_engine import check_reminders, get_data_freshness
 from backend.specialists import check_specialists
 from backend.posture_runner import analyze_posture_image
+from backend.tools.context_tools import get_weather
 
 load_dotenv()
 MOBILE_ENCRYPTION_KEY = b"healthhack2026secretkey123456789"
@@ -966,8 +967,10 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
         profile = await get_profile_dict(user_id, db)
         if profile is None:
             raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+        current_time = datetime.now()
         bio_age = calculate_bio_age(profile)
-        reminder_list = await check_reminders(user_id, db)
+        weather = await get_weather(user_id, db)
+        weather_context = assess_outdoor_conditions(weather, current_time.hour)
         alerts = await check_alerts(user_id, db)
         specialists = _enrich_specialist_recommendations(profile, check_specialists(profile))
         gamification = await get_gamification_summary(user_id, db)
@@ -979,6 +982,7 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
         nutrition.update(_today_nutrition_progress(meals))
         water_today_ml = await get_water_today(user_id)
         wellness = mental_wellness_score(profile)
+        reminder_list = await check_reminders(user_id, db)
         risk_rows = await get_risk_projections(user_id)
         if not risk_rows:
             from backend.formulas import project_risk
@@ -1001,7 +1005,12 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "flights": profile.get("flights_climbed"),
             "logged_workout_calories": activity_overlay.get("logged_workout_calories_today"),
         }
-        nudge = check_inactivity(profile, datetime.now().hour)
+        nudge_profile = {
+            **profile,
+            "steps_today": metrics["steps"],
+            "exercise_min": metrics["exercise_min"],
+        }
+        nudge = check_inactivity(nudge_profile, current_time.hour, weather=weather, mental_score=wellness["score"])
         cross_domain = _build_cross_domain_insight(profile, bio_age)
         narrative = _build_dashboard_narrative(profile, bio_age, risk_rows, wellness)
         return {
@@ -1027,6 +1036,7 @@ async def get_dashboard(user_id: str) -> dict[str, Any]:
             "cross_domain_insight": cross_domain,
             "narrative": narrative,
             "activity_nudge": nudge,
+            "weather": {**weather, **weather_context},
         }
     finally:
         await db.close()

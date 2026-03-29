@@ -42,8 +42,18 @@ export default function ReminderCards({ compact = false }) {
             </button>
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">{reminder.label || reminder.source}</div>
             <div className={`${compact ? 'text-xs' : 'text-sm'} text-slate-700`}>{message}</div>
+            {reminder.suggested_activity && (
+              <div className="mt-2 text-xs font-medium text-emerald-700">
+                Suggested: {reminder.suggested_activity}
+              </div>
+            )}
+            {reminder.conditions_summary && (
+              <div className="mt-2 text-xs text-slate-500">
+                Conditions: {reminder.conditions_summary}
+              </div>
+            )}
             <div className="text-xs text-slate-500 mt-2">
-              Last recorded: {formatDateTime(reminder.last_synced)}
+              {reminder.last_synced ? `Last recorded: ${formatDateTime(reminder.last_synced)}` : 'Context-aware suggestion for today'}
             </div>
           </div>
         );

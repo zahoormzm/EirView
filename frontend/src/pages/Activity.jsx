@@ -28,6 +28,8 @@ export default function ActivityPage() {
     `User: ${selectedUserId}`,
     `Current steps today: ${dashboard?.metrics?.steps ?? 'unknown'}`,
     `Current step goal: ${dashboard?.step_goal ?? 'unknown'}`,
+    `Weather: ${dashboard?.weather?.summary ?? 'unknown'}`,
+    `Weather note: ${dashboard?.weather?.note ?? 'none'}`,
     `Workout sessions this week: ${summary?.total_sessions ?? 'unknown'}`,
     `Workout minutes this week: ${summary?.total_minutes ?? 'unknown'}`,
     `Workout calories this week: ${summary?.total_calories ?? 'unknown'}`,
@@ -106,7 +108,7 @@ export default function ActivityPage() {
         </div>
       </div>
       <WorkoutLog workouts={workouts} />
-      <ActivityNudge currentSteps={dashboard?.metrics?.steps || 0} stepGoal={dashboard?.step_goal || 7500} />
+      <ActivityNudge currentSteps={dashboard?.metrics?.steps || 0} stepGoal={dashboard?.step_goal || 7500} nudge={dashboard?.activity_nudge} />
     </div>
   );
 }

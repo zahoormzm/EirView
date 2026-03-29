@@ -5,6 +5,8 @@ from typing import Any
 
 import aiosqlite
 
+from backend.activity import check_inactivity, get_today_activity_overlay
+
 DATA_REFRESH_INTERVALS: dict[str, int] = {
     "healthkit": 2,
     "apple_health": 2,
@@ -164,6 +166,7 @@ async def get_reminders(user_id: str, db: aiosqlite.Connection) -> list[dict[str
 
     reminders: list[dict[str, Any]] = []
     profile = await (await db.execute("SELECT * FROM profiles WHERE user_id=?", (user_id,))).fetchone()
+    profile_dict = dict(profile) if profile else None
     source_rows = await (await db.execute("SELECT * FROM data_sources WHERE user_id=?", (user_id,))).fetchall()
     normal_blood = True
     if profile:
@@ -213,6 +216,35 @@ async def get_reminders(user_id: str, db: aiosqlite.Connection) -> list[dict[str
         blood_interval = 90 if (profile["ldl"] or 0) > 130 else 180
         if blood_test and (date.today() - blood_test.date()).days > blood_interval:
             medical("blood_panel", "Blood lipid panel follow-up is due.", (date.today() - blood_test.date()).days - blood_interval)
+    if profile_dict:
+        from backend.tools.context_tools import get_weather
+
+        now = datetime.now()
+        mental_score = profile_dict.get("mental_wellness_score")
+        weather = await get_weather(user_id, db)
+        activity_overlay = await get_today_activity_overlay(user_id, db)
+        nudge_profile = {
+            **profile_dict,
+            "steps_today": int(profile_dict.get("steps_today") or 0) + int(activity_overlay.get("estimated_steps_from_logged_activity") or 0),
+            "exercise_min": max(int(profile_dict.get("exercise_min") or 0), int(activity_overlay.get("logged_workout_minutes_today") or 0)),
+        }
+        nudge = check_inactivity(nudge_profile, now.hour, weather=weather, mental_score=mental_score)
+        if nudge:
+            conditions = nudge.get("conditions") or {}
+            reminders.append(
+                {
+                    "type": "contextual_activity",
+                    "source": nudge.get("type", "daily_movement"),
+                    "label": nudge.get("title", "Daily activity"),
+                    "message": nudge.get("message"),
+                    "urgency": "medium" if nudge.get("steps_behind") else "low",
+                    "days_overdue": 0,
+                    "last_synced": None,
+                    "suggested_activity": nudge.get("suggested_activity"),
+                    "conditions_summary": conditions.get("summary"),
+                    "conditions_note": conditions.get("note"),
+                }
+            )
     return sorted(reminders, key=lambda item: (URGENCY_RANK.get(item["urgency"], 0), item["days_overdue"]), reverse=True)
 
 

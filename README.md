@@ -1,152 +1,213 @@
 # EirView
 
-**"Your progress, in full focus."**
+EirView is a full-stack health intelligence platform that combines deterministic health calculations, multi-source data ingestion, and AI-assisted coaching. The application is built with a React frontend, a FastAPI backend, SQLite storage, and a small agent/tool layer for guided reasoning tasks.
 
-Multi-source health intelligence platform that computes biological age, projects health risks, and provides AI-powered coaching. Built for HackMarch 2.0 (AI for Longevity).
+## What The Project Does
 
-## Architecture
+- Computes biological age across cardiovascular, metabolic, musculoskeletal, and neurological subsystems
+- Tracks health data from blood reports, body composition scans, Apple Health exports, meals, posture checks, and manual entries
+- Projects medium-term health risks and supports what-if scenario simulation
+- Provides contextual coaching for activity, nutrition, future-self reflection, and mental health support
+- Surfaces reminders, alerts, specialist recommendations, and data freshness timelines
 
+## Stack
+
+### Frontend
+
+- React 19
+- Vite
+- Tailwind CSS
+- Zustand
+- Recharts
+
+### Backend
+
+- FastAPI
+- SQLite with `aiosqlite`
+- Deterministic health and risk logic in Python
+- Anthropic and Gemini integrations for selected parsing and coaching flows
+
+### Supporting Services
+
+- Spotify Web API
+- OpenWeatherMap
+- USDA food data
+- ONNX Runtime for face age inference
+- MediaPipe Tasks for browser posture analysis
+
+## Repository Layout
+
+```text
+Health/
+├── backend/
+│   ├── main.py
+│   ├── database.py
+│   ├── formulas.py
+│   ├── reminder_engine.py
+│   ├── activity.py
+│   ├── parsers.py
+│   ├── alerts.py
+│   ├── specialists.py
+│   ├── reports.py
+│   ├── family.py
+│   ├── gamification.py
+│   ├── spotify.py
+│   ├── faceage.py
+│   ├── posture_runner.py
+│   ├── agents/
+│   └── tools/
+├── frontend/
+│   ├── src/
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── api.js
+│   │   ├── store.js
+│   │   └── App.jsx
+│   └── package.json
+├── FaceAge-main/
+├── EIRVIEW_MASTER_DOCUMENT.md
+└── codex_prompts/
 ```
-React + Tailwind          FastAPI + SQLite          Claude 4.6 + Gemini 2.5 Flash
-(port 5173)         -->   (port 8000)         -->   (Multi-agent system)
-                          |
-                          +--> FaceAge ONNX (bio age from face)
-                          +--> USDA API (grounded nutrition data)
-                          +--> Spine-Watch (live posture detection)
-                          +--> Spotify Web API (mood tracking)
-                          +--> OpenWeatherMap + AQICN (environment)
-```
 
-## Key Features (35)
+## Core Product Areas
 
-- **Biological Age**: 4 sub-system formula (cardiovascular, metabolic, musculoskeletal, neurological) + FaceAge + device age comparison
-- **6 AI Agents**: Orchestrator, Collector, Mirror, Time Machine, Coach, Mental Health — all with Claude tool-use
-- **Multi-Model Routing**: Claude for complex reasoning, Gemini Flash for vision/classification. Database as shared context.
-- **USDA-Grounded Meals**: AI identifies food from photos, USDA provides real nutrition, blood-work overlay
-- **Risk Projection**: 15-year disease risk curves (diabetes, CVD, metabolic, mental decline)
-- **Interactive Simulation**: Habit sliders recalculate bio age in real-time
-- **3 Chat Interfaces**: Future Self, Mental Health (PHQ-9), Coach — all SSE streaming
-- **Gamification**: Duolingo-style streaks, XP, levels, achievements, leaderboard
-- **Family System**: Join via code, auto-derive family health history from member data
-- **Smart Reminders**: Data freshness tracking, medical checkup scheduling
-- **Emergency Alerts**: Critical value detection, doctor email notification, crisis helplines
-- **Specialist Recommendations**: Condition detection -> cardiologist/endocrinologist/psychiatrist + nearby hospitals
-- **Spotify Mood Tracking**: Smart flagging (valence trend + cross-signal confirmation)
+### Health Modeling
 
-## How to Build
+- Biological age scoring
+- Mental wellness scoring
+- Risk projection
+- Habit simulation
+- Workout target generation
+- Nutrition target generation
 
-### Prerequisites
-- Python 3.11+
+### Data Ingestion
+
+- Blood report upload
+- Cult.fit/body composition scan upload
+- Apple Health zip or XML import
+- Meal photo or meal text analysis
+- Face age upload
+- Browser-based posture checks
+
+### Coaching And Guidance
+
+- Coach chat
+- Mental health chat
+- Future Self chat
+- Contextual reminders
+- Specialist recommendations
+- Doctor-report generation
+
+## Local Development
+
+### Requirements
+
+- Python 3.12+
 - Node.js 20+
-- API keys: Anthropic, Gemini, OpenWeatherMap (optional), Spotify (optional)
+- npm
 
-### Setup
+### 1. Create And Activate A Virtual Environment
 
 ```bash
-# Backend
-cd backend
-python -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env  # Fill in API keys
+cd /Users/zahoormashahir/Documents/Projects/Health
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-# Frontend
-cd frontend
+### 2. Install Backend Dependencies
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+### 3. Install Frontend Dependencies
+
+```bash
+cd /Users/zahoormashahir/Documents/Projects/Health/frontend
 npm install
 ```
 
-### Run
+### 4. Configure Environment Variables
+
+Copy `.env.example` to `.env` at the repository root and populate the keys you need.
+
+Minimum useful setup:
+
+```env
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+EIRVIEW_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173
+```
+
+Optional integrations:
+
+```env
+OPENWEATHERMAP_API_KEY=
+USDA_API_KEY=DEMO_KEY
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:5173/callback
+FACEAGE_MODEL_PATH=../FaceAge-main/models/faceage_model.onnx
+FACE_LANDMARKER_PATH=../FaceAge-main/models/face_landmarker.task
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM_EMAIL=
+SMTP_FROM_NAME=EirView Alerts
+```
+
+## Running The Application
+
+### Backend
 
 ```bash
-# Terminal 1: Backend
-cd backend && source venv/bin/activate && uvicorn main:app --port 8000 --reload
-
-# Terminal 2: Frontend
-cd frontend && npm run dev
-
-# Terminal 3: Posture (optional)
-cd backend && python posture_runner.py
+cd /Users/zahoormashahir/Documents/Projects/Health
+source .venv/bin/activate
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir backend
 ```
 
-Frontend: http://localhost:5173 | Backend docs: http://localhost:8000/docs
+### Frontend
 
-## Project Structure
-
-```
-Health/
-├── backend/
-│   ├── main.py                  # FastAPI routes
-│   ├── database.py              # SQLite (18 tables)
-│   ├── formulas.py              # Deterministic calculations (ZERO AI)
-│   ├── ai_router.py             # Claude 4.6 + Gemini 2.5 Flash routing
-│   ├── agents/                  # 6 AI agents with tool-use
-│   ├── tools/                   # Tool implementations
-│   ├── parsers.py               # Blood PDF, Cult.fit, Apple Health XML, USDA meals
-│   ├── family.py                # Family groups + auto history
-│   ├── specialists.py           # Condition -> specialist mapping
-│   ├── gamification.py          # Streaks, XP, achievements
-│   ├── faceage.py               # ONNX face age inference
-│   └── spotify.py               # Spotify OAuth + mood analysis
-│
-├── frontend/
-│   ├── src/
-│   │   ├── App.jsx              # Router + layout
-│   │   ├── api.js               # All backend calls + SSE
-│   │   ├── store.js             # Zustand state
-│   │   ├── pages/               # 11 pages
-│   │   └── components/          # 30+ components
-│   └── package.json
-│
-├── codex_prompts/               # Detailed prompts for Codex to generate code
-│   ├── 01_BACKEND_CORE.md       # Database, formulas, gamification, family, specialists
-│   ├── 02_BACKEND_AI_AND_API.md # AI router, agents, tools, parsers, API routes
-│   └── 03_FRONTEND.md           # Complete React frontend with detailed UI specs
-│
-├── EIRVIEW_MASTER_DOCUMENT.md   # Full documentation (demo script, Q&A, formulas)
-├── IPHONE_APP_PROMPT.md         # iOS companion app spec
-└── EIRVIEW_IOS_BACKEND_CONTRACT.md  # Mobile API contract
+```bash
+cd /Users/zahoormashahir/Documents/Projects/Health/frontend
+npm run dev -- --host 127.0.0.1
 ```
 
-## Team Assignment
+### URLs
 
-| Person | Responsibility | Codex Prompt |
-|--------|---------------|-------------|
-| Person 1 | Backend core: DB, formulas, gamification, family, specialists, alerts | `01_BACKEND_CORE.md` |
-| Person 2 | Backend AI: agents, tools, API routes, parsers | `02_BACKEND_AI_AND_API.md` |
-| Person 3 | Frontend: all pages and components | `03_FRONTEND.md` |
+- Frontend: [http://127.0.0.1:5173](http://127.0.0.1:5173)
+- API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
 
-### How to use the prompts
-1. Open Codex (or Claude Code)
-2. Copy the relevant prompt file
-3. Paste as the task — it has all the context needed for one-shot generation
-4. Review the output, fix any integration issues
+## Notes On Optional Features
 
-## Key Design Decisions
+### Face Age
 
-1. **Deterministic formulas, not AI**: All health calculations (bio age, risk, wellness score) are deterministic code in `formulas.py`. AI only does parsing and narrative generation. This means results are reproducible and auditable.
+Face age inference requires the ONNX model assets under `FaceAge-main/models/`.
 
-2. **Multi-model routing**: Claude handles complex reasoning (mental health, coaching). Gemini handles fast vision tasks (meal photos, screenshots). Database is shared context — models never see each other's conversations.
+### Posture
 
-3. **USDA-grounded nutrition**: We don't ask AI to guess calories. Vision AI identifies food, USDA database provides lab-tested nutrition. Every number has a USDA food ID.
+The current posture feature runs in the browser using MediaPipe Tasks Web and stores readings through the backend.
 
-4. **Family history from data, not checkboxes**: When a family member uploads blood work showing prediabetes, the system automatically updates other members' risk projections. No manual "family history" forms.
+### Weather And AQI
 
-5. **Smart Spotify flagging**: We don't assume sad music = sad person. We only flag when listening patterns shift from the user's personal baseline AND at least one biological signal (sleep, HRV, steps) confirms it.
+Weather-driven suggestions fall back to cached/default conditions if `OPENWEATHERMAP_API_KEY` is not configured.
 
-## Pre-loaded Demo Users
+### Spotify
 
-| User | Profile | Highlights |
-|------|---------|-----------|
-| zahoor | 19M, real blood work + Apple Health data | LDL 121, VitD 15 (deficient), bio age ~17.2 |
-| riya | 22F, sample data | Glucose 108 (prediabetic), PHQ-9 12, poor sleep |
-| arjun | 24M, healthy athlete | All values optimal, VO2max 52, bio age ~21.2 |
+Spotify integration is per EirView user and requires the OAuth redirect URI in Spotify developer settings to match the value in `.env`.
 
-## Environment Variables
+## Validation
 
+Useful local checks:
+
+```bash
+cd /Users/zahoormashahir/Documents/Projects/Health
+python3 -m py_compile backend/main.py backend/formulas.py backend/reminder_engine.py backend/activity.py
+cd frontend
+npm run build
 ```
-ANTHROPIC_API_KEY=sk-ant-...
-GEMINI_API_KEY=...
-OPENWEATHERMAP_API_KEY=...     # Optional, falls back to hardcoded
-USDA_API_KEY=DEMO_KEY          # Free, no signup needed
-SPOTIFY_CLIENT_ID=...          # Optional
-SPOTIFY_CLIENT_SECRET=...
-```
+
+## Project Status
+
+This repository contains a working application with active product features and several optional integrations. The backend and frontend are designed to run locally together, with SQLite as the default development datastore.

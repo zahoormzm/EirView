@@ -37,6 +37,63 @@ MAX_STEP_EQUIVALENT_PER_WORKOUT: int = 4000
 MAX_STEP_EQUIVALENT_PER_DAY: int = 6000
 
 
+def assess_outdoor_conditions(weather: dict[str, Any] | None, current_hour: int | None = None) -> dict[str, Any]:
+    """Return a simple weather/AQI suitability summary for movement prompts."""
+
+    payload = weather or {}
+    temp = payload.get("temp_c")
+    aqi = payload.get("aqi")
+    uv = payload.get("uv_index")
+    description = payload.get("description") or "Conditions unavailable"
+    blockers: list[str] = []
+    cautions: list[str] = []
+
+    if aqi is not None:
+        if aqi > 110:
+            blockers.append(f"AQI {aqi} is elevated")
+        elif aqi > 80:
+            cautions.append(f"AQI {aqi} is only moderate")
+    if temp is not None:
+        if temp >= 36:
+            blockers.append(f"{temp:.0f}°C is too hot for an outdoor push")
+        elif temp >= 33 or temp <= 16:
+            cautions.append(f"{temp:.0f}°C makes outdoor work less comfortable")
+    if uv is not None and current_hour is not None and 10 <= current_hour <= 16:
+        if uv >= 9:
+            blockers.append(f"UV {uv:.0f} is high right now")
+        elif uv >= 7:
+            cautions.append(f"UV {uv:.0f} is strong")
+    if current_hour is not None and (current_hour < 6 or current_hour >= 21):
+        cautions.append("daylight is limited")
+
+    outdoor_ok = not blockers
+    note_parts = blockers or cautions or ["air and temperature look reasonable"]
+    note = ", ".join(note_parts).capitalize() + "."
+    label = "Good for outdoor movement" if outdoor_ok and not cautions else "Outdoor with caution" if outdoor_ok else "Prefer indoor movement"
+    suggested_activity = "Take a 15-minute outdoor walk" if outdoor_ok else "Choose an indoor walk, treadmill, or mobility set"
+    summary_bits = [description.title()]
+    if temp is not None:
+        summary_bits.append(f"{temp:.0f}°C")
+    if aqi is not None:
+        summary_bits.append(f"AQI {aqi}")
+    if uv is not None:
+        summary_bits.append(f"UV {uv:.0f}")
+
+    return {
+        "temp_c": temp,
+        "aqi": aqi,
+        "uv_index": uv,
+        "description": description,
+        "summary": " · ".join(summary_bits),
+        "outdoor_ok": outdoor_ok,
+        "label": label,
+        "note": note,
+        "suggested_activity": suggested_activity,
+        "blockers": blockers,
+        "cautions": cautions,
+    }
+
+
 def _target_sessions_from_frequency(frequency: str) -> int:
     """Convert target frequency text like '5x/week' into a session count."""
 
@@ -223,26 +280,63 @@ async def get_workout_targets(user_id: str, db: aiosqlite.Connection) -> dict[st
     return targets
 
 
-def check_inactivity(profile: dict[str, Any], current_hour: int) -> dict[str, Any] | None:
-    """Check if user is behind on daily activity and should be nudged."""
+def check_inactivity(
+    profile: dict[str, Any],
+    current_hour: int,
+    weather: dict[str, Any] | None = None,
+    mental_score: float | None = None,
+) -> dict[str, Any] | None:
+    """Check if user is behind on daily activity and return a context-aware nudge."""
 
     hours_awake = max(current_hour - 7, 1)
     steps_avg = profile.get("steps_avg_7d") or 7500
     current_steps = profile.get("steps_today") or 0
     expected_steps = (steps_avg / 16) * hours_awake
+    conditions = assess_outdoor_conditions(weather, current_hour)
     if current_steps < expected_steps * 0.6:
         behind = int(expected_steps - current_steps)
+        if conditions["outdoor_ok"]:
+            return {
+                "type": "step_nudge",
+                "title": "Good window to move",
+                "message": f"You're {behind:,} steps behind your usual pace. {conditions['summary']} makes this a good moment for a short outdoor walk.",
+                "steps_behind": behind,
+                "suggested_activity": "Take a 15-minute outdoor walk",
+                "conditions": conditions,
+            }
         return {
             "type": "step_nudge",
-            "message": f"You're {behind:,} steps behind your usual pace. A 15-minute walk would help close the gap.",
+            "title": "Catch up indoors today",
+            "message": f"You're {behind:,} steps behind your usual pace, but {conditions['note'].rstrip('.').lower()}. Use an indoor walk or treadmill block instead.",
             "steps_behind": behind,
-            "suggested_activity": "Take a 15-minute walk",
+            "suggested_activity": "Do 12 minutes of indoor walking or light cardio",
+            "conditions": conditions,
         }
     if (profile.get("exercise_min") or 0) < 10 and current_hour >= 18:
         return {
             "type": "exercise_nudge",
-            "message": "You have not moved much today. A short session still counts.",
+            "title": "Short movement still counts",
+            "message": "You have not moved much today. A short session still counts before the day ends.",
             "steps_behind": None,
-            "suggested_activity": "Try 10 minutes of mobility or bodyweight exercise",
+            "suggested_activity": conditions["suggested_activity"] if conditions["outdoor_ok"] else "Try 10 minutes of indoor mobility or bodyweight exercise",
+            "conditions": conditions,
+        }
+    if mental_score is not None and mental_score < 70:
+        if conditions["outdoor_ok"] and 8 <= current_hour <= 18:
+            return {
+                "type": "fresh_air_reset",
+                "title": "Fresh-air reset",
+                "message": f"Mental wellness is running low at {mental_score:.0f}/100. {conditions['summary']} is a decent setup for a short outdoor reset.",
+                "steps_behind": None,
+                "suggested_activity": "Take a phone-free 10-minute fresh-air walk",
+                "conditions": conditions,
+            }
+        return {
+            "type": "fresh_air_reset",
+            "title": "Reset your state indoors",
+            "message": f"Mental wellness is running low at {mental_score:.0f}/100, but {conditions['note'].rstrip('.').lower()}. Do a 10-minute indoor breathing and mobility reset instead.",
+            "steps_behind": None,
+            "suggested_activity": "Step away from screens for 10 minutes of stretching and breathing",
+            "conditions": conditions,
         }
     return None

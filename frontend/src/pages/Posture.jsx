@@ -1,4 +1,4 @@
-import { Camera, CirclePause, Play, ScanLine } from 'lucide-react';
+import { Camera, CirclePause, Play, ScanLine, Volume2, VolumeX } from 'lucide-react';
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
@@ -153,12 +153,15 @@ export default function Posture() {
   const intervalRef = useRef(null);
   const animationRef = useRef(null);
   const latestAnalysisRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const lastAlertAtRef = useRef(0);
   const { selectedUserId, profile, showToast } = useStore();
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(false);
   const [summary, setSummary] = useState(null);
   const [history, setHistory] = useState([]);
   const [backendIssue, setBackendIssue] = useState('');
+  const [soundAlertsEnabled, setSoundAlertsEnabled] = useState(true);
   const chartData = useMemo(
     () => history.map((row, index) => ({ sample: index + 1, score: Number(row.score_pct || 0), angle: Number(row.avg_angle || 0) })),
     [history]
@@ -181,6 +184,30 @@ export default function Posture() {
       intervalRef.current = null;
     }
     setRunning(false);
+  };
+
+  const playAlertTone = () => {
+    if (!soundAlertsEnabled) return;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContextClass();
+    }
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.value = 660;
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.26);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 0.28);
   };
 
   const analyzeCurrentFrame = async () => {
@@ -234,6 +261,9 @@ export default function Posture() {
     return () => {
       if (intervalRef.current) window.clearInterval(intervalRef.current);
       if (animationRef.current) window.cancelAnimationFrame(animationRef.current);
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {});
+      }
     };
   }, []);
 
@@ -248,6 +278,10 @@ export default function Posture() {
         if (analysis) {
           drawOverlay(overlayRef.current, webcamRef.current?.video, analysis);
           setBackendIssue('');
+          if (running && soundAlertsEnabled && analysis.score < 55 && Date.now() - lastAlertAtRef.current > 12000) {
+            lastAlertAtRef.current = Date.now();
+            playAlertTone();
+          }
         } else {
           clearCanvas(overlayRef.current);
         }
@@ -333,9 +367,18 @@ export default function Posture() {
                 <span className="inline-flex items-center gap-2"><CirclePause size={16} /> Stop Auto Check</span>
               </button>
             )}
+            <button
+              onClick={() => setSoundAlertsEnabled((current) => !current)}
+              className={`rounded-lg px-4 py-2 font-medium transition border ${soundAlertsEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100'}`}
+            >
+              <span className="inline-flex items-center gap-2">
+                {soundAlertsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+                {soundAlertsEnabled ? 'Sound alerts on' : 'Sound alerts off'}
+              </span>
+            </button>
           </div>
           <div className="text-xs text-slate-500 mt-4">
-            Best results: sit slightly side-on so one ear, shoulder, and hip are visible, keep your upper body in frame, and allow browser camera access when prompted. The overlay now shows the exact landmarks and line being scored.
+            Best results: sit slightly side-on so one ear, shoulder, and hip are visible, keep your upper body in frame, and allow browser camera access when prompted. The overlay now shows the exact landmarks and line being scored. During auto-check, a soft tone plays roughly every 12 seconds if posture stays poor.
           </div>
         </div>
 
