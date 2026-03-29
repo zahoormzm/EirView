@@ -64,9 +64,7 @@ Health/
 │   │   ├── store.js
 │   │   └── App.jsx
 │   └── package.json
-├── FaceAge-main/
-├── EIRVIEW_MASTER_DOCUMENT.md
-└── codex_prompts/
+└── ...
 ```
 
 ## Core Product Areas
@@ -147,8 +145,8 @@ USDA_API_KEY=DEMO_KEY
 SPOTIFY_CLIENT_ID=
 SPOTIFY_CLIENT_SECRET=
 SPOTIFY_REDIRECT_URI=http://127.0.0.1:5173/callback
-FACEAGE_MODEL_PATH=../FaceAge-main/models/faceage_model.onnx
-FACE_LANDMARKER_PATH=../FaceAge-main/models/face_landmarker.task
+FACEAGE_MODEL_PATH=FaceAge-main/models/faceage_model.onnx
+FACE_LANDMARKER_PATH=FaceAge-main/models/face_landmarker.task
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
@@ -183,7 +181,7 @@ npm run dev -- --host 127.0.0.1
 
 ### Face Age
 
-Face age inference requires the ONNX model assets under `FaceAge-main/models/`.
+Face age inference requires local model assets under `FaceAge-main/models/`. That directory is treated as a local runtime dependency and is intentionally not committed to the repository.
 
 ### Posture
 
