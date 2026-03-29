@@ -59,6 +59,53 @@ Health/
 └── ...
 ```
 
+## Design Philosophy
+
+The central architectural decision is: **formulas compute, AI communicates.**
+
+Every health number — biological age, risk projection, nutrition limits — comes from deterministic Python code based on peer-reviewed research. The AI models never generate a health number. They parse unstructured input, explain what the math produced, and decide which tools to invoke. Same inputs always produce the same outputs. The boundary between math and language model is explicit and auditable via the transparency page.
+
+## Agent Architecture
+
+The backend uses 6 specialized agents built on Claude's tool-use API:
+
+| Agent | Role |
+|---|---|
+| **Orchestrator** | Receives user input and routes to the appropriate specialist agent |
+| **Collector** | Parses unstructured documents — blood reports, fitness screenshots, food photos |
+| **Mirror** | Computes and explains biological age across all four subsystems |
+| **Time Machine** | Projects health risk curves 15 years forward and runs what-if simulations |
+| **Coach** | Generates personalized recommendations using blood work, weather, AQI, and nutrition gaps |
+| **Mental Health** | Conducts conversational assessments mapped to the PHQ-9 clinical scale |
+
+Each agent calls deterministic tool functions for any calculation — it never does the math itself. Agents chain automatically: uploading a blood report triggers the Collector, which triggers the Mirror, Coach, and Time Machine in sequence. Every agent call is logged with prompt, token count, latency, and cost.
+
+## Multi-Model Routing
+
+The system routes between two models based on task type:
+
+- **Claude** handles complex reasoning — mental health conversations, coaching, anything requiring nuance or clinical context
+- **Gemini 2.5 Flash** handles fast vision tasks — identifying food in photos, reading fitness screenshots — at a fraction of the cost and under one second latency
+
+The database is the shared context. The models never communicate with each other; they read from and write to the same source of truth.
+
+## Formula References
+
+The biological age engine is inspired by [PhenoAge (Levine et al., *Aging*, 2018)](https://www.aging-us.com/article/101414/text) and the [Klemera-Doubal method (2006)](https://pubmed.ncbi.nlm.nih.gov/16318865/), adapted into a four-subsystem model using consumer-available biomarkers.
+
+| Subsystem | Weight | Key inputs | Sources |
+|---|---|---|---|
+| Cardiovascular | 0.30 | Resting HR, LDL/HDL ratio, BP, VO2 max | Framingham Heart Study; D'Agostino et al., *Circulation*, 2008; ATP III guidelines |
+| Metabolic | 0.25 | Fasting glucose, HbA1c, triglycerides, BMI, visceral fat | GBD 2015 Obesity Collaborators; ADA prediabetic thresholds |
+| Musculoskeletal | 0.20 | Body fat %, muscle mass, bone density, posture score, gait asymmetry | Standard clinical reference ranges |
+| Neurological | 0.25 | HRV (SDNN), sleep stages, sleep duration, PHQ-9 score | ESC HRV standards, 1996; Cappuccio et al., *Sleep*, 2010 |
+
+Additional references:
+- **VO2 max weighting** — Ross et al., *Circulation*, 2016 (strongest single predictor of cardiovascular longevity)
+- **Vitamin D thresholds** — Holick, *NEJM*, 2007; Endocrine Society guidelines, 2011
+- **PHQ-9** — Kroenke, Spitzer & Williams, *Journal of General Internal Medicine*, 2001
+- **FaceAge model** — Biological age from facial imaging, *The Lancet Digital Health*, 2025; trained on 58,851 individuals, runs locally via ONNX (no cloud call, image never leaves the device)
+
 ## Core Features
 
 **Health Modeling**
